@@ -19,8 +19,21 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
-; Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-; Initial revision
+; Revision 1.2  2004/07/24 20:11:58  Skip Hansen
+; Version 0.10 changes:
+; 1. Moved ISR back to bank 4 !! Bank 4's "table" jumps to vfo0 ... which
+;    requires the ISR to be in the same bank as the mode tables.
+; 2. Modified initialization code to clear scanning bits from mode 1 loaded from
+;    EEPROM to prevent scanning of junk modes.
+; 3. Modified modechange routine to enable tistate on port C when changing
+;    modes for compatibility with 1 of 8 "clam shell" heads.
+; 4. Modified SaveMode to turn put port C back into a tristate mode after the
+;    Syntor changes modes.
+; 5. Modified setmodeadr to prevent it from clobbering the currently selected
+;    memory channel.
+;
+; Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+; Initial import: V0.09.  Burned into first 10 boards.
 ;
 ;
         processor       16F877a
@@ -35,6 +48,7 @@
         extern  sendmode,CanSend
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
+        extern  vfoscanfix,changemode1,setmodeadr3,setmodeadr4
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -100,7 +114,7 @@ LoopCnt res     1
 ; -------------------------------------------------------------------------
 ;The following must remain in order as they are read from EEROM on powerup
 
-        global  code_0,code_4,code_5
+        global  code_0,code_4,code_5,code_9,code_a
 code_0  res     1       ;nonpriority scan list M1->M8
 code_1  res     1       ;nonpriority scan list M9->M16
 code_2  res     1       ;nonpriority scan list M17->M24
@@ -178,7 +192,9 @@ isr     MOVWF   W_TEMP          ;Copy W to TEMP register
         movwf   PCLATH          ;
         goto    isr_cont
 
-PROG2   code
+PROG4   code
+;NB the ISR code *must* be in the same page as the code tables !
+
         ;isr continuation
 isr_cont
         btfss   PIR1,CCP1IF     ;/OE interrupt ?
@@ -337,6 +353,7 @@ vfof    movf    code_f,w
         movwf   PORTB
         return
 
+PROG2   code
 
 startup1
 ;Init port A
@@ -530,9 +547,9 @@ startup
         call    startup1        ;
 
         clrf    memchan         ;load mode 1 from EEPROM
-        movlw   high recallmode ;
+        movlw   high vfoscanfix ;
         movwf   PCLATH
-        call    recallmode      ;
+        call    vfoscanfix      ;
         
         ifdef   TEST_GENERIC
         movlw   CONFIG_2M       ;
@@ -732,7 +749,11 @@ SaveMode
         btfsc   LastC,5         ;
         iorlw   0x10
         movwf   mode            ;
+        ifdef   V009
         return
+        else
+        goto    mode6ts         ;turn off mode 6 buffer 
+        endif
 
 CLookup
         movlw   high CLookup
@@ -1347,6 +1368,7 @@ setrx2  iorwf   code_b,f
 
 ;toggle the mode output line to force the Syntor to re-read the code plug
         global  changemode
+        ifdef   V009
 changemode
         btfss   PORTC,0         ;
         goto    setmodehigh     ;
@@ -1356,6 +1378,20 @@ changemode
 setmodehigh
         bsf     PORTC,0         ;
         return
+        
+        else    ;v 0.10 code
+changemode
+        goto    changemode1     ;patch
+        nop
+
+mode6ts
+        ;turn off the output driver for the mode 6 output
+        bsf     STATUS,RP0      ;bank 1
+        bsf     TRISC,0         ;disable output
+        bcf     STATUS,RP0      ;bank 0
+        return
+        endif
+        
 
 ;Set Rx & Tx PL frequencies to the Comm Spec number in W
         global  SetPL           ;
@@ -1502,11 +1538,19 @@ setmodeadr
         goto    setmodeadr2     ;continue
         
 setmodeadr1
+        ifdef   V009
         bcf     STATUS,C        ;memchan * 16
         rlf     memchan,f
         rlf     memchan,f
         rlf     memchan,f
         rlf     memchan,f
+        else
+        call    setmodeadr3
+        rlf     LoopCnt,f
+        rlf     LoopCnt,f
+        rlf     LoopCnt,f
+        rlf     LoopCnt,f
+        endif
 
         BSF     STATUS,RP1      ;Bank 2
 
@@ -1516,7 +1560,7 @@ setmodeadr1
         MOVWF   EEADRH          ;
 
         BCF     STATUS,RP1      ;Bank 0
-        MOVF    memchan,w       ;Flash address LSB
+        MOVF    LoopCnt,w       ;Flash address LSB
         BSF     STATUS,RP1      ;Bank 2
         MOVWF   EEADR           ;
         BSF     STATUS,RP0      ;Bank 3
@@ -1524,7 +1568,11 @@ setmodeadr1
 
 setmodeadr2
         BCF     STATUS,RP0      ;Bank 2
+        ifdef   V009
         movlw   low code_0      ;
+        else
+        call    setmodeadr4
+        endif
         movwf   FSR             ;
         return
         
@@ -1548,12 +1596,21 @@ write32ee
 ;Program code_0 -> code_f into specified mode in flash
 ;
         global  prgmode
+        ifdef   V009
 prgmode movlw   d'16'           ;16 bytes to program
         movwf   LoopCnt         ;
         call    setmodeadr
         movlw   0x34            ;ms 6 bits of retlw instruction
         MOVWF   EEDATH          ;
         BCF     STATUS,RP1      ;Bank 0
+        else
+        nop
+        nop
+        nop
+        nop
+        nop
+prgmode call    setmodeadr
+        endif
         call    prg_loop        ;
         goto    changemode      ;force Syntor to reload current channel & return
 
@@ -1608,10 +1665,10 @@ readee  movwf   FSR             ;
         BCF     EECON1,EEPGD    ;Point to eeprom memory
         goto    recall_loop     ;
         
+        nop
+        nop
         global  recallmode
 recallmode
-        movlw   d'16'           ;16 bytes to program
-        movwf   LoopCnt         ;
         call    setmodeadr
         call    recall_loop     ;
         BCF     STATUS,RP1      ;return with bank 0 selected
