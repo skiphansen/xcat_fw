@@ -1,6 +1,9 @@
 // $Log: xcat.lkr,v $
-// Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-// Initial revision
+// Revision 1.2  2004/12/31 00:44:26  Skip Hansen
+// Added some comments about what pages are used for what.
+//
+// Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+// Initial import: V0.09.  Burned into first 10 boards.
 //
 //
 LIBPATH  .
@@ -32,18 +35,31 @@ DATABANK   NAME=comram   START=0x7e     END=0x7F
 // SHAREBANK  NAME=comram   START=0x170    END=0x17F
 // SHAREBANK  NAME=comram   START=0x1F0    END=0x1FF
 
+// code page 0: 
+// main loop, frequency calculations, CV-I commands, Cactus / Palomar
 SECTION    NAME=STARTUP  ROM=vectors    // Reset and interrupt vectors
 SECTION    NAME=PROG1    ROM=page0      // ROM code space - page0
+
+// code page 1: divide routine, serial I/O, Initialization code
 SECTION    NAME=PROG2    ROM=page1      // ROM code space - page1
+
+// code page 2: 
 SECTION    NAME=PROG3    ROM=page2      // ROM code space - page2
+
+// code page 3: Interrupt service routine, mode and PL tables
 SECTION    NAME=PROG4    ROM=page3      // ROM code space - page3
 SECTION    NAME=PL_TBL   ROM=tbl1       // ROM code space - page3
 SECTION    NAME=MODE1    ROM=tbl2       // ROM code space - page3
 SECTION    NAME=MODE2    ROM=tbl3       // ROM code space - page3
+
+// data page 0:
 SECTION    NAME=DATA0    RAM=gpr0       // Bank 0 RAM
+
+// data page 1: serial I/O, sync control system I/O
 SECTION    NAME=DATA1    RAM=gpr1       // Bank 1 RAM
 SECTION    NAME=DATA2    RAM=gpr2       // Bank 2 RAM
 SECTION    NAME=DATA3    RAM=gpr3       // Bank 3 RAM
+
 SECTION    NAME=COMMON   RAM=comram     // Ram space - common to all banks
 SECTION    NAME=IDLOCS   ROM=.idlocs    // ID locations
 SECTION    NAME=CONFIG   ROM=.config    // Configuration bits location
