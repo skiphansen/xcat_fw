@@ -1,6 +1,15 @@
 ;$Log: icom.asm,v $
-;Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-;Initial revision
+;Revision 1.2  2004/07/24 20:05:50  Skip Hansen
+;Version 0.10 changes:
+;1. Modified CanSend to return false when already sending.
+;2. Fixed bank bugs when disabling PL (freq 0.00).
+;3. Added patch routine modechange1 - enable tistate on port port C when
+;   for compatibility with 1 of 8 "clam shell" heads.
+;4. Added patch routines setmode3, setmode4 to prevent moving
+;   stuff around too much.
+;
+;Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+;Initial import: V0.09.  Burned into first 10 boards.
 ;
 ;        
         processor       16F877A
@@ -48,6 +57,7 @@ Data_13         res     1
 Data_14         res     1
 Data_15         res     1
 Data_16         res     1
+Data_17         res     1
 DataP           res     1       ;rx data pointer (NB: must follow last Data_x)
 
 ;CI-V transmit variables - in Bank 1 RAM
@@ -91,7 +101,7 @@ PROG2           code
         extern  TxOff_3,TxOff_2,TxOff_1,TxOff_0
         extern  readee
 
-        extern  mode,Config0,ConfUF,code_0
+        extern  mode,Config0,ConfUF,code_0,code_9,code_a
 
 #define LoopCntr        DivA
 #define temp_0          fvco_0
@@ -327,13 +337,29 @@ txstate4
 txstate5
         movf    txdpointer,w    ;get pointer to data
         movwf   DataP           ;
-        movf    txdatacount,w   ;get datt acount
+        movf    txdatacount,w   ;get data acount
         movwf   txcount         ;
         movlw   2               ;
         movwf   txstate         ;
         movlw   4               ;and then state 4
         movwf   NextTxState     ;
         goto    txstate2        ;
+        
+        ;temp routine to clear scanning bits from vfo data in EEPROM
+        ;to workaround version 0.09 bug that left scanning enabled
+        global  vfoscanfix
+vfoscanfix
+        movlw   high recallmode ;
+        movwf   PCLATH
+        call    recallmode      ;
+        
+        ;Disable scan for now
+        movlw   0x80            ;
+        movwf   code_9          ;
+        movwf   code_a          ;
+        return
+        
+        ;END of PROG2 code new ADD new PROG2 code here
 
 PROG1   code
 
@@ -341,8 +367,14 @@ PROG1   code
         global  CanSend
 CanSend BSF     STATUS,RP0      ;Bank 1
         movf    rxstate,w       ;
+        if      0        
         BCF     STATUS,RP0      ;Bank 0
         return
+        else
+        goto    CanSend1        ;continue
+        nop        
+        endif
+
 
 ;signal report <cmd0xaa><sub code 0x81><mode><0/1>
         global  sendmode
@@ -531,8 +563,8 @@ trycmd1b
         call    SetRxCS         ;Turn off rx PL
         movf    temp_2,w        ;
         iorwf   temp_3,w        ;Freq = 0.0 ?
-        movlw   1               ;
-        btfss   STATUS,Z        ;
+        btfsc   STATUS,Z        ;
+        goto    changeok        ;change mode to load new code, then send OK
         call    setrxpl         ;nope, set Rx PL
         goto    tstplresult
 
@@ -541,14 +573,15 @@ setencode
         call    SetTxCS         ;Turn off tx PL
         movf    temp_2,w        ;
         iorwf   temp_3,w        ;Freq = 0.0 ?
-        movlw   1               ;
-        btfss   STATUS,Z        ;
+        btfsc   STATUS,Z        ;
+        goto    changeok        ;change mode to load new code, then send OK
         call    settxpl         ;nope, set Tx PL
+
+        nop
 tstplresult
-        BSF     STATUS,RP0      ;Bank 1
         andlw   1
         btfss   STATUS,Z        ;
-        goto    changeok        ;
+        goto    SendOk          ;
         goto    SendNG          ;
 
 trycmdaa
@@ -574,6 +607,7 @@ trycmdaa
 ; 0x06 - set Tx offset
 ; 0x07 - get VCO split frequencies
 ; 0x87 - get VCO split frequencies response
+; 0x08 - set VCO split frequencies
 ;
 ;  Cmd     Data_0         Data_1 ... Data_16
 ; <0xaa>   [0x01 | 0x80 ]  <16 bytes of raw data in code plug format>
@@ -618,8 +652,8 @@ setcpdat
         movwf   Data_0          ;
         call    copy1_0         ;
 changeok        
-        call    changemode      ;
-        goto    SendOk          ;
+        BCF     STATUS,RP0      ;Bank 0
+        goto    changeok1       ;
 
 ;subcommand 2: get firmware version
 getver  movf    From_Adr,w      ;copy from adr into
@@ -634,9 +668,9 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_3          ;
         movlw   a'.'            ;
         movwf   Data_4          ;
-        movlw   a'0'            ;
+        movlw   a'1'            ;
         movwf   Data_5          ;
-        movlw   a'9'            ;
+        movlw   a'0'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -671,7 +705,7 @@ setconfig
         movlw   CONFIG_EEPROM_ADR  ;
 
         ;write txcount bytes from bank 0 RAM pointed to by FSR into
-        ;eeprom address in w
+        ;eeprom address in w, then send OK
 Write0ToEEPROM
         BSF     STATUS,RP1      ;Bank 2
         movwf   EEADR           ;
@@ -1289,6 +1323,52 @@ crcmhzlookup
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
+
+;return with zero flag set if it's ok to send (patch)
+CanSend1
+        iorwf   txstate,w       ;
+        BCF     STATUS,RP0      ;Bank 0
+        return
+
+changeok1
+        call    changemode      ;
+        goto    SendOk          ;
+
+;toggle the mode output line to force the Syntor to re-read the code plug
+        global  changemode1
+changemode1
+        btfss   PORTC,0         ;
+        goto    setmodehigh     ;
+        bsf     STATUS,RP0      ;bank 1
+        bcf     TRISC,0         ;enable output
+        bcf     STATUS,RP0      ;bank 0
+        bcf     PORTC,0         ;set the output low
+        return
+
+setmodehigh
+        bsf     STATUS,RP0      ;bank 1
+        bcf     TRISC,0         ;enable output
+        bcf     STATUS,RP0      ;bank 0
+        bsf     PORTC,0         ;set the output high
+        return
+
+        global  setmodeadr3
+setmodeadr3
+        movwf   LoopCnt         ;
+        bcf     STATUS,C        ;memchan * 16
+        return                  ;
+
+        global  setmodeadr4
+setmodeadr4                
+        movlw   0x34            ;ms 6 bits of retlw instruction
+        MOVWF   EEDATH          ;
+        BCF     STATUS,RP1      ;Bank 0
+        movlw   d'16'           ;16 bytes to program
+        movwf   LoopCnt         ;
+        movlw   low code_0      ;
+        return
+        
+        ;END of PROG1 code new ADD new PROG1 code here
 
         end
 
