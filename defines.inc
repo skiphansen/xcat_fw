@@ -1,7 +1,10 @@
 ;
 ; $Log: defines.inc,v $
-; Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-; Initial revision
+; Revision 1.2  2004/12/31 00:40:12  Skip Hansen
+; Added CONFIG_REMOTE_MASK, COM_FLAG_*.
+;
+; Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+; Initial import: V0.09.  Burned into first 10 boards.
 ;        
         ERRORLEVEL -302 ;remove messages about using proper bank
 
@@ -9,7 +12,7 @@
 ;#define VHF_RANGE_1
 ;#define VHF_RANGE_2
 ;#define TEST_GENERIC
-
+;#define TEST_PALOMAR
 
 ;EEPROM layout
 
@@ -45,14 +48,21 @@
 ;             1 = send COS signal transistion messages
 #define CONFIG_COS_MSG  3
 
-;Config0, B4, B5, B6 - Control system type
+;Config0, B4, B5 - Control system type
 ;
 #define CONFIG_CTRL_MASK 0x3    ;NB: after nibble swap!
 #define CONFIG_GENERIC  0x1     ;Generic / Link Comm RLC3 / Doug Hall
 #define CONFIG_CACTUS   0x2     ;Palomar / Cactus
 
+;Config0, B7, B6 - Remote base base number when in Cactus mode
+;0x00 - remote base 1 (first 3 bytes in serial stream)
+;0x40 - remote base 2 (bytes 4->6 in serial stream)
+;0x80 - remote base 3 (bytes 7->9 in serial stream)
+;0xC0 - remote base 4 (bytes 10->12 in the serial stream)
+#define CONFIG_REMOTE_MASK      0xc0
 
-;Config1 - User defined output port bit usages
+
+;ConfUF - User defined output port bit usages
 #define CONFIG_COS_IN   0       ;b0: 0 - UF1 COS input
                                 ;    1 - UF1 user output
 #define CONFIG_QRP      1       ;b1: 0 - UF2 QRP power output
@@ -63,6 +73,12 @@
 #define CONFIG_2_5_SEL  5       ;b5: 0 - UF6 user output
                                 ;    1 - UF6 active adds 2.5 Khz to frequency
                                                                 
+
+;icomflags bit definitions
+#define COM_FLAG_LSB1ST 0
+#define COM_FLAG_TXOFF  1
+#define COM_FLAG_RX_SET 2
+#define COM_FLAG_TX_SET 3
 
 #define SERAL_DAT       PORTE,0
 #define COS_DAT         PORTD,0
