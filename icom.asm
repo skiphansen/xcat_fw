@@ -1,4 +1,13 @@
 ;$Log: icom.asm,v $
+;Revision 1.4  2004/12/31 04:32:20  Skip Hansen
+;Version 0.12 changes:
+;1. Corrected enable sense for CONFIG_2_5_SEL, it should be active LOW.
+;2. Corrected active sense for CONFIG_2_5_SEL, it should be active HIGH.
+;3. Corrected value examined for CONFIG_2_5_SEL, it should be srx5.
+;4. Call addw2temp1 to add 2.5 Khz, addw2temp1 masks W with a 0xf
+;   so only 900 hz was added instead of 2500 Hz.
+;5. Bumped versions number to 0.12.
+;
 ;Revision 1.3  2004/12/31 00:39:11  Skip Hansen
 ;1. Removed all patch kludges!  Too hard to keep track of.  Code is now
 ;   just inline.
@@ -36,7 +45,8 @@ memchan         res     1       ; 1 -> 31
 icomflags       res     1       ;bit0 = 0 bcd convert msb first (ctcss)
                                 ;bit0 = 1 bcd convert lsb first (freq)
                                 ;bit1 = 1 Generic data routine, tx offset mode
-                                ;bit2 = 1 Rx Frequency set successfully
+                                ;bit2 = 1 Rx frequency set successfully
+                                ;bit3 = 1 Tx frequency set successfully
 
 DATA1           udata
 
@@ -665,7 +675,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'1'            ;
         movwf   Data_5          ;
-        movlw   a'1'            ;
+        movlw   a'2'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -913,6 +923,7 @@ tempx2  bcf     STATUS,C
 
 addw2temp
         andlw   0xf             ;
+addw2temp1        
         addwf   temp_3,f
         movlw   1
         btfsc    STATUS,C
@@ -1045,8 +1056,9 @@ copy1_0 movf    Data_0,w        ;get from address
 ;
 ; Byte lsb bit of byte 1 shifted in first
 ;  Byte 1: 8 user functions, high = off, low = on
+; (srx5)
 ;  Byte 2: B7 - TX power, 1 = on
-;          B6 - RX power, 1 = on
+; (srx4)   B6 - RX power, 1 = on
 ;          B5, B4 - Tx power:
 ;                 B5 0, B4 0 = low
 ;                 B5 1, B4 0 = medium
@@ -1073,7 +1085,7 @@ copy1_0 movf    Data_0,w        ;get from address
 ;               duplex operations.
 ;
 ;  Byte 3: B7 - Radio power, 1 = on
-;          B6 - 5 Khz bit, 1 = +5 Khz
+; (srx3)   B6 - 5 Khz bit, 1 = +5 Khz
 ;          B5 -> B4 Offset:
 ;               B5 0, B4 0 = negative Tx offset
 ;               B5 0, B4 1 = positive Tx offset
@@ -1082,10 +1094,10 @@ copy1_0 movf    Data_0,w        ;get from address
 ;          B0 -> B3 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
 ;
 ;  Byte 4: B4 -> B7 100 Khz digit
-;          B0 -> B3 10 Khz digit
+; (srx2)   B0 -> B3 10 Khz digit
 ;
 ;  Byte 5: B7 - 1 = PL decode enable
-;          B6 - 1 = PL encode enable
+; (srx1)   B6 - 1 = PL encode enable
 ;          B0 -> B5 = PL tone (Communications Specialists TS64 number)
 ;
 ;  (Byte 6 and 7 are currently ignored by the Xcat)
@@ -1212,13 +1224,13 @@ gensetband
         btfsc   srx3,6          ;jump if not +5 Khz
         call    addw2temp       ;
         call    tempx10         ;
-        btfss   ConfUF,CONFIG_2_5_SEL
+        btfsc   ConfUF,CONFIG_2_5_SEL
         goto    gen4            ;
 
         ;add 2.5 Khz to frequency if UF6 is high
         movlw   d'25'           ;
-        btfss   srx1,CONFIG_2_5_SEL
-        call    addw2temp       ;add 2.5 Khz
+        btfsc   srx5,CONFIG_2_5_SEL
+        call    addw2temp1      ;add 2.5 Khz
 
 gen4    call    tempx10         ;
         call    tempx10         ;
