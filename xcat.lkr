@@ -1,4 +1,7 @@
 // $Log: xcat.lkr,v $
+// Revision 1.3  2005/01/05 05:10:56  Skip Hansen
+// Start tbl1 4 bytes earlier to provide room for CI-V adr and baudrate storage.
+//
 // Revision 1.2  2004/12/31 00:44:26  Skip Hansen
 // Added some comments about what pages are used for what.
 //
@@ -12,8 +15,8 @@ CODEPAGE   NAME=vectors  START=0x2      END=0x10     PROTECTED
 CODEPAGE   NAME=page0    START=0x140    END=0x7FF
 CODEPAGE   NAME=page1    START=0x0800   END=0x0FFF
 CODEPAGE   NAME=page2    START=0x1000   END=0x17FF
-CODEPAGE   NAME=page3    START=0x1800   END=0x1C3F
-CODEPAGE   NAME=tbl1     START=0x1D40   END=0x1DFF
+CODEPAGE   NAME=page3    START=0x1800   END=0x1C3b
+CODEPAGE   NAME=tbl1     START=0x1D3c   END=0x1DFF
 CODEPAGE   NAME=tbl2     START=0x1e00   END=0x1eFF
 CODEPAGE   NAME=tbl3     START=0x1f00   END=0x1FFF
 CODEPAGE   NAME=.idlocs  START=0x2000   END=0x2003   PROTECTED
