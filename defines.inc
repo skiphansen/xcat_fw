@@ -1,5 +1,8 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.3  2004/12/31 04:28:53  Skip Hansen
+; Corrected comments on CONFIG_2_5_SEL, it's active LOW.
+;
 ; Revision 1.2  2004/12/31 00:40:12  Skip Hansen
 ; Added CONFIG_REMOTE_MASK, COM_FLAG_*.
 ;
@@ -70,9 +73,8 @@
 #define CONFIG_HI_PWR   2       ;b2: 0 - UF3 High power output
                                 ;    1 - UF3 output
 
-#define CONFIG_2_5_SEL  5       ;b5: 0 - UF6 user output
-                                ;    1 - UF6 active adds 2.5 Khz to frequency
-                                                                
+#define CONFIG_2_5_SEL  5       ;b5: 0 - UF6 active adds 2.5 Khz to frequency
+                                ;    1 - UF6 user output
 
 ;icomflags bit definitions
 #define COM_FLAG_LSB1ST 0
