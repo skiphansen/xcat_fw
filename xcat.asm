@@ -19,6 +19,15 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.5  2005/01/05 05:10:02  Skip Hansen
+; 1. Added debug counter, srxbad, to count invalid sync frames received.
+; 2. Clear *all* RAM at power up.
+; 3. Corrected initialization of Port D ... bits 1, 2 and 5 are always outputs.
+; 4. Cleaned up Sync data processing.  Call cnv_ctrlsys rather each routine.
+;    Call setrxcnt to set bit count for next pass.
+; 5. Added code to set B1_FLAG_NEW_DATA when the last 3 bytes
+;    of sync data have changed since the last frame (used by Palomar code)
+;
 ; Revision 1.4  2004/12/31 04:33:02  Skip Hansen
 ; Corrected TEST_GENERIC test code.
 ;
@@ -57,7 +66,7 @@
         extern  sendmode,CanSend
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
-        extern  icomflags
+        extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -201,15 +210,18 @@ srx3_d  res     1               ;first byte clocked in (Palomar mode)
 srx2_d  res     1               ;
 srx1_d  res     1               ;first byte clocked in (Doug Hall mode)
 
-srxbits_d res   1               ;number of bits clocked in from BCD port
+srxbits_d res   1               ;number of bits to clock in from BCD port
         global  srxto_d
 srxto_d res     1               ;number of sync data timeouts
 
+        global  srxcnt_d
 srxcnt_d res    1               ;number of bits clocked in from BCD port
         global  srxgood         ;
 srxgood res     1               ;number of frames that set a RX frequency
         global  stxgood         ;
 stxgood res     1               ;number of frames that set a TX frequency
+        global  srxbad          ;
+srxbad  res     1               ;number of invalid frames
 
         ; Start at the reset vector
 STARTUP code
@@ -395,6 +407,47 @@ vfof    movf    code_f,w
 PROG2   code
 
 startup1
+;Clear all of RAM
+        clrf    STATUS          ;bank 0
+        movlw   0x20            ;start of RAM
+        movwf   FSR             ;
+clrloop clrf    INDF            ;
+        incf    FSR,f           ;
+        movlw   0x80            ;end of RAM in Bank 0
+        subwf   FSR,w           ;
+        btfss   STATUS,Z        ;
+        goto    clrloop         ;
+
+        ;clear bank 1        
+        movlw   0xa0            ;start of RAM
+        movwf   FSR             ;
+clr1    clrf    INDF            ;
+        incf    FSR,f           ;
+        movf    FSR,w           ;
+        btfss   STATUS,Z        ;
+        goto    clr1            ;
+        
+        bsf     STATUS,IRP      ;
+        ;clear bank 2        
+        movlw   0x10            ;start of RAM
+        movwf   FSR             ;
+clr2    clrf    INDF            ;
+        incf    FSR,f           ;
+        movlw   0x70            ;end of RAM in Bank 0
+        subwf   FSR,w           ;
+        btfss   STATUS,Z        ;
+        goto    clr2            ;
+        
+        movlw   0x90            ;start of RAM in bank 3
+        movwf   FSR             ;
+clr3    clrf    INDF            ;
+        incf    FSR,f           ;
+        movlw   0xf0            ;end of RAM in Bank 3
+        subwf   FSR,w           ;
+        btfss   STATUS,Z        ;
+        goto    clr3            ;
+        clrf    STATUS          ;bank 0
+        
 ;Init port A
         banksel PORTC           ;
         bsf     PORTC,0         ;mode select output high
@@ -422,11 +475,15 @@ startup1
         clrf    EEADRH          ;
         movlw   low code_0      ;point to start of data
         call    readee1         ;
-        
+        ifdef   TEST_PALOMAR
+        movlw   0x23            ;
+        movwf   Config0         ;
+        endif      
         call    serialinit      ;initialize serial port
         
 ;Init port D
         movf    ConfUF,w        ;1 = user output bit
+        iorlw   0x26            ;bits 1, 2 and 5 are always outputs
         xorlw   0xff            ;invert for tristate control
         bsf     STATUS,RP0      ;bank 1
         movwf   TRISD           ;
@@ -469,12 +526,6 @@ startup1
         movwf   code_9          ;
         movwf   code_a          ;
         
-        BSF     STATUS,RP0      ;Bank 1
-        clrf    srxto_d         ;
-        clrf    srxgood         ;
-        clrf    stxgood         ;
-        BCF     STATUS,RP0      ;Bank 0
-
         ifdef  VHF_RANGE_1
         ;VHF range 1 radio, tx vco split
         ;144000000 = 8954400
@@ -595,6 +646,7 @@ SyncClkInit
         bsf     PIE2,CCP2IE     ;
         bcf     STATUS,RP0      ;bank 0
         return                  ;
+
 ;
 ;
 PROG1   code
@@ -604,7 +656,7 @@ startup
         call    startup1        ;
         
         ifdef   TEST_GENERIC
-        movlw   CONFIG_2M       ;
+        movlw   0x13            ;
         movwf   Config0         ;
         movlw   0x00            ;load 144.52
         movwf   AARGB0          ;srx1
@@ -621,7 +673,7 @@ startup
         bsf     STATUS,RP0      ;bank 1
         clrf    srxto           ;clear timeout counter
         bcf     STATUS,RP0      ;bank 0
-        call    cnv_generic     ;
+        call    cnv_ctrlsys     ;
         endif
 
         ifdef   TEST_GENERIC
@@ -643,8 +695,6 @@ startup
         endif
         
         ifdef   TEST_PALOMAR
-        movlw   0x23            ;
-        movwf   Config0         ;
         movlw   0xee            ;load 146.76, 123.0
         movwf   AARGB2          ;
         movlw   0x9f            ;
@@ -656,9 +706,9 @@ startup
         bsf     STATUS,RP0      ;bank 1
         clrf    srxto           ;clear timeout counter
         clrf    srxcnt          ;
+        bsf     b1flags,B1_FLAG_NEW_DATA        ;
         bcf     STATUS,RP0      ;bank 0
-
-        call    cnvcactus
+        call    cnv_ctrlsys     ;
         endif
 
 mainloop
@@ -681,7 +731,9 @@ main4
         movlw   high txdata     ;
         movwf   PCLATH          ;
         bsf     STATUS,RP0      ;bank 1
+        ifndef SIMULATE
         btfsc   TXSTA,TRMT
+        endif                   ;
         call    txdata          ;
         bcf     STATUS,RP0      ;bank 0
         movlw   high SaveMode   ;
@@ -715,14 +767,27 @@ main4
         incf    srxto_d,w       ;
         btfss   STATUS,Z        ;don't roll over counter
         incf    srxto_d,f       ;
+
+        ;check to see if any of the first 3 bytes have changed
+        bcf     b1flags,B1_FLAG_NEW_DATA        ;
+        movf    srx3,w          ;has srx3 changed ?
+        subwf   srx3_d,w        ;
+        btfss   STATUS,Z        ;
+        goto    newdata         ;
+        movf    srx4,w          ;has srx4 changed ?
+        subwf   srx4_d,w        ;
+        btfss   STATUS,Z        ;
+        goto    newdata         ;
+        movf    srx5,w          ;has srx5 changed ?
+        subwf   srx5_d,w        ;
+        btfss   STATUS,Z        ;
+newdata bsf     b1flags,B1_FLAG_NEW_DATA        ;
         
         ;copy srx1...srx5 into Bank0 for the conversion routines
         movf    srx1,w          ;
         movwf   srx1_d
         bcf     STATUS,RP0      ;bank 0
         movwf   AARGB0          ;
-        bcf     icomflags,COM_FLAG_RX_SET ;clear RX frequency set flag
-        bcf     icomflags,COM_FLAG_TX_SET ;clear TX frequency set flag
 
         bsf     STATUS,RP0      ;bank 1
         movf    srx2,w          ;
@@ -758,28 +823,13 @@ main4
         bsf     PIE2,CCP2IE     ;re-enable clock interrupts
         bcf     STATUS,RP0      ;bank 0
 
-        movlw   high main3
-        movwf   PCLATH
+        bcf     icomflags,COM_FLAG_RX_SET ;clear RX frequency set flag
+        bcf     icomflags,COM_FLAG_TX_SET ;clear TX frequency set flag
+        bcf     icomflags,COM_FLAG_BAD_DATA
+        call    cnv_ctrlsys     ;
+        call    setsrxcnt       ;reset bit count for next time
 
-        swapf   Config0,w       ;
-        andlw   CONFIG_CTRL_MASK;
-        addwf   PCL,f
-main3   goto    main2           ;no control system configured
-        goto    generic         ;
-        goto    cactus          ;
-        goto    main2           ;not used
-
-generic
-        call    cnv_generic     ;
-        goto    main2           ;
-
-        ;Cactus mode
-cactus  
-        call    cnvcactus       ;
-
-main2   bsf     STATUS,RP0      ;bank 1
-        movf    srxcnt,w        ;
-        movwf   srxcnt_d        ;save
+        bsf     STATUS,RP0      ;bank 1
         clrf    srxbits         ;reset for next time
         clrf    srxto           ;
         bcf     STATUS,RP0      ;bank 0
@@ -794,13 +844,22 @@ main2   bsf     STATUS,RP0      ;bank 1
         
 txnotset        
         btfss   icomflags,COM_FLAG_RX_SET
-        goto    main1           ;
+        goto    rxnotset        ;
         bsf     STATUS,RP0      ;bank 1
         
         incf    srxgood,w       ;
         btfss   STATUS,Z        ;don't roll over counter
         incf    srxgood,f       ;
 
+rxnotset
+        btfss   icomflags,COM_FLAG_BAD_DATA
+        goto    main1           ;
+        bsf     STATUS,RP0      ;bank 1
+        
+        incf    srxbad,w        ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    srxbad,f        ;
+        
 main1   bcf     STATUS,RP0      ;bank 0
         goto    mainloop
 
