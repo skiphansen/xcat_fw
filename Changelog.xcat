@@ -1,0 +1,83 @@
+####################################
+Changes in version 0.13 1/8/2005
+
+New features:
+1. Added CI-V SetCommunications parameter command to allow the Xcat's CI-V
+   baudrate and address to be modified.
+   
+Minor enhancements: 
+1. Modified SetConfiguration command to reset after an Ack has been sent. 
+   Previously newly configured control systems didn't become active until
+   the power was cycled.
+   
+2. Added support for 1 byte Generic Data commands.
+
+3. Added Generic Data support for high/medium/low power.
+
+4. Modified code to enable PL receive when PL encode is active in Palomar
+   mode.  The Palomar protocol does not have a bit to enable/disable PL 
+   receive, but it's more useful for it to always be on than off.  This
+   allows the control system to use the radio's PL enable line to control
+   PL receive while the Xcat controls the PL frequency.
+
+5. Added new sync data debug counter to count invalid frames received.
+
+6. Modified Palomar code to avoid forcing a mode reload unless the received
+   data has changed. (The Palomar controller sends data once a second even
+   when nothing has changed).
+
+Bug fixes:
+1. Corrected bug in Palomar high/lower power selection (it was backwards)
+
+2. Corrected initialization of Port D ... bits 1, 2 and 5 are always outputs.
+
+####################################
+Changes in version 0.12 12/31/2004 (limited beta release)
+
+Bug fixes:
+1. Corrected enable sense for I/O 5 +2.5 Khz option.
+2. Corrected active sense for I/O 5 +2.5 Khz option.
+3. Corrected bug in calculations used to add 2.5 Khz, previously 900 hz was 
+   added instead of 2500 Hz.  Since 900 hz is not a multiple of any of the
+   Syntor's reference frequencies this prevented frequencies from being set
+   at all when the I/O 5 +2.5 Khz option was active.
+
+####################################
+Changes in version 0.11 12/31/2004 (limited beta release)
+
+Bug fixes:
+1. Modified Palomar code to provide selection of which 3 bytes in an 12
+   byte stream to use for control.
+
+Minor enhancements: 
+1. Added debug variables and CI-V message to retrieve them to support
+   debugging of Doug Hall and Palomar related problems.
+
+2. Modified Generic data routine to accept 5 or 7 bytes of data.
+3. Major modifications to Palomar support.  It might even work now!
+
+####################################
+Changes in version 0.10 7/24/2004
+
+Bug fixes:
+1. Disabled scanning in mode 1. The original Xcats had nonpriority
+scanning enabled for all 32 modes; this caused problem since the
+data in modes 2 to 31 was not valid. This caused the Syntor
+to "beat" on the Xcat to the extent that it was unable to
+communicate reliably with the PC. This problem only occurred when
+scanning was enabled. Radios with "clam shell" heads typically have
+scanning enabled by default.
+
+2. Modified the mode change logic to accommodate "clam shell" style
+control heads. There are two types of control heads, those with 1
+of 8 switches and those with BCD encoded switches. The original
+Xcat firmware only supported the BCD style heads.
+
+3. Corrected a *major* systematic problem that prevented the Xcat
+from talking to the Syntor at ALL.
+
+####################################
+Version 0.09 7/9/2004
+Initial release
+
+
