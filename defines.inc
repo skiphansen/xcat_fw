@@ -1,5 +1,8 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.4  2005/01/05 05:01:31  Skip Hansen
+; Added COM_FLAG_BAD_DATA, B1_FLAG_RESET, B1_FLAG_NEW_DATA
+;
 ; Revision 1.3  2004/12/31 04:28:53  Skip Hansen
 ; Corrected comments on CONFIG_2_5_SEL, it's active LOW.
 ;
@@ -81,6 +84,11 @@
 #define COM_FLAG_TXOFF  1
 #define COM_FLAG_RX_SET 2
 #define COM_FLAG_TX_SET 3
+#define COM_FLAG_BAD_DATA 4
+
+;b1flags bit definitions
+#define B1_FLAG_RESET   1        
+#define B1_FLAG_NEW_DATA 2        
 
 #define SERAL_DAT       PORTE,0
 #define COS_DAT         PORTD,0
