@@ -19,6 +19,9 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.4  2004/12/31 04:33:02  Skip Hansen
+; Corrected TEST_GENERIC test code.
+;
 ; Revision 1.3  2004/12/31 00:44:00  Skip Hansen
 ; 1. Added sync data debug variables srx*_d and srxgood, stxgood.
 ; 2. Modified sync data ISR to disable reception after srxcnt bit have been
@@ -603,16 +606,21 @@ startup
         ifdef   TEST_GENERIC
         movlw   CONFIG_2M       ;
         movwf   Config0         ;
-        movlw   0xff            ;load 144.60
+        movlw   0x00            ;load 144.52
         movwf   AARGB0          ;srx1
         movlw   0xc2            ;
         movwf   AARGB1          ;srx2
-        movlw   0xa4            ;144
+        movlw   0xa6            ;146
         movwf   AARGB2          ;srx3
-        movlw   0x60            ;.60
+        movlw   0x52            ;.52
         movwf   AARGB3          ;srx4
-        movlw   4               ;
+        movlw   0xff            ;
         movwf   BARGB0          ;srx5
+        movlw   d'40'           ;
+        movwf   BARGB1          ;
+        bsf     STATUS,RP0      ;bank 1
+        clrf    srxto           ;clear timeout counter
+        bcf     STATUS,RP0      ;bank 0
         call    cnv_generic     ;
         endif
 
