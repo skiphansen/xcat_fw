@@ -5,11 +5,25 @@
 ;Ordered by Comm Spec PL number
 ;
 ; $Log: tables.asm,v $
-; Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-; Initial revision
+; Revision 1.2  2005/01/05 05:02:17  Skip Hansen
+; Added GetBaudRate, GetCIVAdr.
+;
+; Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+; Initial import: V0.09.  Burned into first 10 boards.
 ;
 ;
 PL_TBL  code
+        global  GetBaudRate
+GetBaudRate
+        retlw   0x4             ;19200
+        
+        global  GetCIVAdr       ;
+GetCIVAdr
+        retlw   0x20            ;
+;2 words of padding
+        retlw   0x00            ;
+        retlw   0x20            ;
+        
         global  pltable
 pltable
         data    d'670'  ;1
@@ -227,6 +241,6 @@ limits440
         data    0x74
         data    0xd2
         data    0x1a
-        
+
         end
 
