@@ -1,4 +1,20 @@
 ;$Log: icom.asm,v $
+;Revision 1.5  2005/01/05 05:19:24  Skip Hansen
+;1. Added SetCommunications parameter command 0xaa, 0xa.
+;2. Modified SetConfiguration command to reset after Ack has been sent.
+;3. Corrected some bad comments in Doug Hall format... srx* were wrong.
+;4. Added support for 1 byte Generic Data commands.
+;5. Corrected last correction on handling of +2.5 Khz bit, srx1 *was* the
+;   correct byte.
+;6. Added Generic Data support for high/medium/low power.
+;7. Made code that set number of bits to receive a subroutine so it can
+;   be called at initialization so first sync frame is received correctly.
+;8. Corrected bug in Palomar high/lower power selection (it was backwards)
+;9. Modified code to enable PL receive when PL encode is active in Palomar
+;   mode.
+;10. Added cnv_ctrlsys routine to make it easier to add support for more
+;   control systems.
+;
 ;Revision 1.4  2004/12/31 04:32:20  Skip Hansen
 ;Version 0.12 changes:
 ;1. Corrected enable sense for CONFIG_2_5_SEL, it should be active LOW.
@@ -87,7 +103,8 @@ txcount         res     1
 
 txdatacount     res     1       ;amount of page data to sent
 txdpointer      res     1       ;pointer to data
-
+                global b1flags
+b1flags         res     1       ;
 PROG2           code
 
 ;CI-V protocol:
@@ -123,6 +140,7 @@ PROG2           code
 
         extern  mode,Config0,ConfUF,code_0,code_8,code_9,code_a,srxcnt
         extern  srx5_d,srxto_d,srxgood,stxgood
+        extern  GetBaudRate,GetCIVAdr,srxcnt_d
 
 #define LoopCntr        DivA
 #define temp_0          fvco_0
@@ -143,31 +161,65 @@ PROG2           code
 #define srxbits         BARGB1
 
 
-;init uart for 19,200, 8 data bits, no parity
+;init uart for 8 data bits, no parity
         global  serialinit
 serialinit
-        ifndef  HEX_LOADER
+        movlw   high setsrxcnt  ;
+        movwf   PCLATH          ;
+        call    setsrxcnt       ;set number of sync bits to receive
         BSF     STATUS,RP0      ;Bank 1
-        movlw   d'64'           ;19200 divider, 20 Mhz clock, BRGH = 1
-        movwf   SPBRG
+        ;initialize serial variables
+        
+        movlw   high GetCIVAdr  ;
+        movwf   PCLATH          ;
+        call    GetCIVAdr       ;
+        movwf   OurCIVAdr       ;save it
+        
+        ;initialize UART
+        call    GetBaudRate     ;
+        movwf   Data_0          ;save it
+        movlw   high serialinit1;
+        movwf   PCLATH          ;
+        movlw   4               ;19200 ?
+        subwf   Data_0,w        ;
+        btfss   STATUS,Z        ;
+        goto    serialinit1     ;
+        ;19200, no need to reinitialize UART
+        BCF     STATUS,RP0      ;Bank 0
+        return                  
+        
+serialinit1
+        movlw   0x20            ;TX enable
+        movwf   TXSTA           ;
+        movlw   high BaudLookup ;
+        movwf   PCLATH          ;
+        movf    Data_0,w        ;
+        addwf   PCL,f           ;
+BaudLookup
+        goto    b1200           ;0 - 1200 baud
+        goto    b2400           ;1 - 2400 baud
+        goto    b4800           ;2 - 4800 baud
+        goto    b9600           ;3 - 9600 baud
 
+b1200   bcf     TXSTA,BRGH      ;BRGH = 0
+        movlw   d'255'          ;
+        goto    setbaud         ;
+
+b2400   bcf     TXSTA,BRGH      ;BRGH = 0
+        movlw   d'129'          ;
+        goto    setbaud         ;
+
+b4800   bcf     TXSTA,BRGH      ;BRGH = 0
+        movlw   d'64'           ;
+        goto    setbaud         ;
+
+b9600   bsf     TXSTA,BRGH      ;BRGH = 1
+        movlw   d'129'          ;
+
+setbaud movwf   SPBRG
         BCF     STATUS,RP0      ;Bank 0
         movlw   0x90            ;Serial port enable, continuous receive
         movwf   RCSTA           ;
-
-        BSF     STATUS,RP0      ;Bank 1
-        movlw   0x24            ;TX enable, high speed async mode
-        movwf   TXSTA           ;
-        BCF     STATUS,RP0      ;Bank 0
-        endif
-
-        BSF     STATUS,RP0      ;Bank 1
-        clrf    Duplex          ;default to simplex
-        clrf    rxstate         ;ready for receive
-        clrf    txstate         ;Tx idle
-        movlw   0x20            ;
-        movwf   OurCIVAdr       ;
-        BCF     STATUS,RP0      ;Bank 0
         return
 ;
 ;
@@ -284,7 +336,12 @@ txdata  movf    txstate,w
 
 ;txstate 0: idle
 txstate0
+        btfss   b1flags,B1_FLAG_RESET   ;
         return                  ;nothing to do
+        ;reset !        
+        movlw   0               ;
+        movwf   PCLATH          ;
+        goto    0               ;
 
 ;txstate 1: Send data from DataP (Bank 1 RAM) until 0xfd or txcount expires
 ;NB: this state is not appropriate for binary data
@@ -365,7 +422,7 @@ txstate5
         movlw   4               ;and then state 4
         movwf   NextTxState     ;
         goto    txstate2        ;
-        
+
         ;END of PROG2 code new ADD new PROG2 code here
 
 PROG1   code
@@ -612,12 +669,14 @@ trycmdaa
 ; 0x08 - set VCO split frequencies
 ; 0x09 - get sync data debug info
 ; 0x89 - get sync data debug response
+; 0x0a - Set communications parameters
+; 0x8a - Set communications parameters ACK
 ;
 ;  Cmd     Data_0         Data_1 ... Data_16
 ; <0xaa>   [0x01 | 0x80 ]  <16 bytes of raw data in code plug format>
 ;
 ;
-        movlw   d'10'           ;> max sub command ?
+        movlw   d'11'           ;> max sub command ?
         subwf   Data_0,w        ;
         btfsc   STATUS,C        ;
         goto    SendNG          ;
@@ -625,16 +684,17 @@ trycmdaa
         movwf   PCLATH
         movf    Data_0,w        ;
 aasub   addwf   PCL,f
-        goto    getcpdat        ;0 - get vfo raw data
-        goto    setcpdat        ;1 - set vfo raw data
-        goto    getver          ;2 - get firmware version
-        goto    getconfig       ;3 - get configuration data
-        goto    setconfig       ;4 - set configuration data
-        goto    GetTxOffset     ;5 - get Tx offset
-        goto    SetTxOffset     ;6 - set Tx offset
-        goto    GetVcoSplitF    ;7 - get VCO split frequencies
-        goto    SetVcoSplitF    ;8 - set VCO split frequencies
-        goto    GetSyncDebug    ;9 - get sync data debug info
+        goto    getcpdat        ;0x0 - get vfo raw data
+        goto    setcpdat        ;0x1 - set vfo raw data
+        goto    getver          ;0x2 - get firmware version
+        goto    getconfig       ;0x3 - get configuration data
+        goto    setconfig       ;0x4 - set configuration data
+        goto    GetTxOffset     ;0x5 - get Tx offset
+        goto    SetTxOffset     ;0x6 - set Tx offset
+        goto    GetVcoSplitF    ;0x7 - get VCO split frequencies
+        goto    SetVcoSplitF    ;0x8 - set VCO split frequencies
+        goto    GetSyncDebug    ;0x9 - get sync data debug info
+        goto    SetCommParam    ;0xa - Set communications parameters
 
 ;subcommand 0: get raw VFO data
 getcpdat
@@ -675,7 +735,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'1'            ;
         movwf   Data_5          ;
-        movlw   a'2'            ;
+        movlw   a'3'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -694,6 +754,7 @@ getconfig
 
 ;subcommand 4 - set configuration data
 setconfig
+        bsf     b1flags,B1_FLAG_RESET   ;reset after sending Ok
         movlw   CONFIG_BYTES    ;copy CONFIG_BYTES bytes
         movwf   txcount         ;
         movlw   low Data_1      ;from Data_1 ...
@@ -805,17 +866,52 @@ GetSyncDebug
         movwf   NextTxState     ;
         movlw   low srx5_d      ;
         movwf   txdpointer      ;
-        movlw   d'10'           ;10 bytes to send
+        movlw   d'11'           ;11 bytes to send
         movwf   txdatacount     ;
         movlw   0x89            ;
+        goto    sendxcatresp    ;kick it off
+
+;subcommand 0xa - Set communications parameters
+SetCommParam    
+        bsf     b1flags,B1_FLAG_RESET   ;reset after sending response
+        movlw   2               ;copy 2 bytes
+        movwf   txcount         ;
+        movlw   low Data_1      ;from Data_1 ...
+        movwf   Data_0          ;
+        movlw   low temp_0      ;to temp_0 ...
+        movwf   DataP           ;
+        call    copy1_0         ;
+        movlw   low temp_0      ;point to data
+        movwf   FSR             ;
+        BCF     STATUS,RP0      ;Bank 0
+        movlw   4               ;write 2 bytes of data, 2 bytes of junk
+        movwf   LoopCnt         ;
+        BSF     STATUS,RP1      ;Bank 2
+        movlw   0x34            ;ms 6 bits of retlw instruction
+        MOVWF   EEDATH          ;
+        movlw   low GetBaudRate ;
+        movwf   EEADR           ;
+        movlw   high GetBaudRate ;
+        movwf   EEADRH          ;
+        BSF     STATUS,RP0      ;Bank 3
+        BSF     EECON1,EEPGD    ;Point to Flash memory
+        BCF     STATUS,RP0      ;Bank 2
+        BCF     STATUS,RP1      ;Bank 0
+        movlw   high prg_loop   ;
+        movwf   PCLATH          ;
+        call    prg_loop        ;
+        BSF     STATUS,RP0      ;Bank 1
+        movlw   0xfd            ;
+        movwf   Data_1          ;EOF
+        movlw   high sendxcatresp ;
+        movwf   PCLATH          ;
+        movlw   0x8a            ;
 ;       goto    sendxcatresp    ;kick it off
         
 sendxcatresp
         movwf   Data_0          ;update subcommand for the response
         movlw   5               ;send header
         movwf   txcount         ;
-        movlw   1               ;txstate 1
-        movwf   txstate         ;
         movf    From_Adr,w      ;copy from adr into
         movwf   To_Adr          ;to adr
         goto    sendit          ;
@@ -1056,9 +1152,10 @@ copy1_0 movf    Data_0,w        ;get from address
 ;
 ; Byte lsb bit of byte 1 shifted in first
 ;  Byte 1: 8 user functions, high = off, low = on
-; (srx5)
+; (srx1, first byte clocked in)
+;
 ;  Byte 2: B7 - TX power, 1 = on
-; (srx4)   B6 - RX power, 1 = on
+; (srx2)   B6 - RX power, 1 = on
 ;          B5, B4 - Tx power:
 ;                 B5 0, B4 0 = low
 ;                 B5 1, B4 0 = medium
@@ -1094,13 +1191,13 @@ copy1_0 movf    Data_0,w        ;get from address
 ;          B0 -> B3 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
 ;
 ;  Byte 4: B4 -> B7 100 Khz digit
-; (srx2)   B0 -> B3 10 Khz digit
+; (srx4)   B0 -> B3 10 Khz digit
 ;
 ;  Byte 5: B7 - 1 = PL decode enable
-; (srx1)   B6 - 1 = PL encode enable
-;          B0 -> B5 = PL tone (Communications Specialists TS64 number)
+; (srx5)   B6 - 1 = PL encode enable
+;          B0 -> B5 = PL tone (Communications Specialists TS64 number - 1)
 ;
-;  (Byte 6 and 7 are currently ignored by the Xcat)
+; (Byte 6 and 7 are currently ignored by the Xcat)
 ;  Byte 6: B4 -> B7 Rx level
 ;          B0 -> B3 Squelch level
 ;
@@ -1110,6 +1207,7 @@ copy1_0 movf    Data_0,w        ;get from address
 ;          B1 - Open squelch
 ;          B0 - Scan on
 ;
+;Communications Specialists TS64 numbers:
 ;1 = 67.0Hz 2 = 71.9Hz 3 = 74.4Hz 4 = 77.0Hz 5 = 79.7Hz
 ;6 = 82.5Hz 7 = 85.4Hz 8 = 88.5Hz 9 = 91.5Hz 10 = 94.8Hz
 ;11 = 97.4Hz 12 = 100.0Hz 13 = 103.5Hz 14 = 107.2Hz 15 = 110.9Hz
@@ -1123,18 +1221,20 @@ copy1_0 movf    Data_0,w        ;get from address
 ;------------------------------------------------------------------------------
         global  cnv_generic
 cnv_generic
-        ;set the number of bits to receive for the next time
-        bsf     STATUS,RP0      ;bank 1
-        movlw   d'40'           ;5 bytes / remote
-        movwf   srxcnt          ;
-        bcf     STATUS,RP0      ;bank 0
+        movlw   d'8'            ;1 bytes ?
         subwf   BARGB1,w        ;
         btfsc   STATUS,Z        ;
-        goto    cnv_generic1    ;
+        goto    uf_only         ;yup
+        movlw   d'40'           ;5 bytes ?
+        subwf   BARGB1,w        ;
+        btfsc   STATUS,Z        ;
+        goto    cnv_generic1    ;yup
         movlw   d'56'           ;7 bytes ?
         subwf   BARGB1,w        ;
-        btfss   STATUS,Z        ;
-        return
+        btfsc   STATUS,Z        ;
+        goto    cnv_generic1    ;yup
+        bsf     icomflags,COM_FLAG_BAD_DATA
+        return                  ;nope
         
 cnv_generic1
         bcf     icomflags,COM_FLAG_TXOFF ;Not Tx frequency select (yet)
@@ -1204,7 +1304,7 @@ gen3    movlw   1               ;10 meters ?
 
 gen10m  movlw   2               ;
 
-        ;w = BCD for Mhz hunderds and tens
+        ;w = Mhz hunderds and tens
 gensetband
         movwf   temp_3          ;Init temp w 100Mhz digit, 10Mhz digit
         clrf    temp_2          ;
@@ -1229,7 +1329,7 @@ gensetband
 
         ;add 2.5 Khz to frequency if UF6 is high
         movlw   d'25'           ;
-        btfsc   srx5,CONFIG_2_5_SEL
+        btfsc   srx1,CONFIG_2_5_SEL
         call    addw2temp1      ;add 2.5 Khz
 
 gen4    call    tempx10         ;
@@ -1258,9 +1358,25 @@ gensimplex
         andwf   PORTD,w         ;get bits we're keeping
         iorwf   srx1,w          ;or in UF bits
         movwf   PORTD           ;output new port D bits
-        ;TODO: set high/medium/low power
+        
+   ;set high/medium/low power
+        
+        movlw   high gensetpwr  ;get ready for indirect call
+        movwf   PCLATH          ;
+        swapf   srx2,w          ;get power bits
+        andlw   0x3             ;
+        call    gensetpwr       ;
         goto    SetFreqs        ;
 
+uf_only movf    ConfUF,w        ;Get User function configuration
+        andwf   srx5,f          ;mask bits to zero that aren't configured as
+                                ;user function outputs
+        xorlw   0xff            ;invert mask
+        andwf   PORTD,w         ;get bits we're keeping
+        iorwf   srx5,w          ;or in UF bits
+        movwf   PORTD           ;output new port D bits
+        return                  ;
+        
 genplus call    PlusOffset      ;
         goto    gensimplex      ;continue
 
@@ -1344,35 +1460,17 @@ settxoff
 
         global  cnvcactus
 cnvcactus
+        bsf     icomflags,COM_FLAG_BAD_DATA
         ;all of the data bits should have been shifted in by now
         bsf     STATUS,RP0      ;bank 1
         movf    srxcnt,f        ;
         bcf     STATUS,RP0      ;bank 0
         btfss   STATUS,Z        ;
-        clrf    srxbits         ;Clear srxbits to force an error later
-
-;calculate the number of bits to receive for the next time
-        
-        movf    Config0,w       ;Get configuration byte
-        bsf     STATUS,RP0      ;bank 1
-        movwf   rxbyte          ;
-        ;shift bits into place
-        rlf     rxbyte,f        ;
-        rlf     rxbyte,f        ;
-        rlf     rxbyte,f        ;
-        movlw   0x3             ;
-        andwf   rxbyte,f        ;
-        incf    rxbyte,f        ;rxbyte = remote base # 1 -> 4
-        
-        clrf    srxcnt          ;
-        movlw   d'24'           ;3 bytes / remote
-cactus6 addwf   srxcnt,f        ;
-        decfsz  rxbyte,f        ;
-        goto    cactus6         ;loop
-        bcf     STATUS,RP0      ;bank 0
+        return                  ;nope
 
 ;In cactus mode we should have N x 3 bytes of serial data were
 ;N = 1, 2, 3 or 4.
+        movlw   d'24'           ;3 bytes ?
         subwf   srxbits,w       ;
         btfsc   STATUS,Z        ;
         goto    cactus1         ;
@@ -1388,49 +1486,58 @@ cactus6 addwf   srxcnt,f        ;
         subwf   srxbits,w       ;
         btfss   STATUS,Z        ;
         return                  ;nope !
-
+        
         ;we have a sane number of bits
-cactus1
+cactus1 bcf     icomflags,COM_FLAG_BAD_DATA
+        ;check to see if anything has changed since the last frame
+        
+        bsf     STATUS,RP0      ;bank 1
+        btfsc   b1flags,B1_FLAG_NEW_DATA        ;
+        goto    cactus6
+        bcf     STATUS,RP0      ;bank 0
+        return                  ;data hasn't changed
+        
         ;data passes initial tests our data is in srx5 .. srx3
         ;data is inverted, fix it
+cactus6        
+        bcf     STATUS,RP0      ;bank 0
         comf    srx5,f          ;
         comf    srx4,f          ;
         comf    srx3,f          ;
         
         ;Set tx power level outputs
-        btfsc   srx4,0          ;
-        goto    cactus3         ;not QRP
-        bsf     PORTD,CONFIG_QRP
-        ;set code plug bit for low power
-        bcf     code_8,2
-        goto    cactus4
-cactus3
-        bcf     PORTD,CONFIG_QRP
-        ;set code plug bit for high power
-        bsf     code_8,2
+        btfss   srx4,0          ;
+        goto    cactus4         ;not QRP
+        call    lowpower        ;
+        goto    cactus2         ;continue
 
 cactus4        
-        btfsc   srx4,1          ;
+        btfss   srx4,1          ;
         goto    cactus5         ;not high power
-        bsf     PORTD,CONFIG_HI_PWR
-        goto    cactus2
-cactus5
-        bcf     PORTD,CONFIG_HI_PWR
+        call    highpower       ;
+        goto    cactus2         ;continue
+        
+cactus5 call    normalpower     ;
         
 cactus2 movfw   srx3            ;get PL code
         andlw   0x1f            ;
         call    SetPL           ;set it
-        btfsc   srx3,5          ;jump if PL encode is enabled
+        ;The cactus control system doesn't have a PL decode enable
+        ;bit so if encode is enabled we'll enable both.  If carrier
+        ;squelch is desired while encoding tone the control system
+        ;hangup box line can be used to achieve this.
+        btfss   srx3,5          ;jump if PL encode is disabled
+        goto    cactus7         ;
         call    SetTxCS         ;disable PL encode
-        ;cactus is always carrier squelch on receive ?
         call    SetRxCS         ;disable PL decode
+cactus7        
         movlw   high crcmhzlookup
         movwf   PCLATH
         movf    Config0,w       ;
         andlw   CONFIG_BAND_MASK;
         call    crcmhzlookup    ;
 
-        ;w = BCD for Mhz hunderds and tens
+        ;w = Mhz hunderds and tens
         movwf   temp_3          ;Init temp w 100Mhz digit, 10Mhz digit
         clrf    temp_2          ;
         clrf    temp_1          ;
@@ -1476,6 +1583,97 @@ setmodehigh
         bcf     TRISC,0         ;enable output
         bcf     STATUS,RP0      ;bank 0
         bsf     PORTC,0         ;set the output high
+        return
+
+        global  setsrxcnt
+setsrxcnt
+        movlw   high srxbittbl  ;
+        movwf   PCLATH          ;
+        swapf   Config0,w       ;get control system type
+        andlw   0xf             ;
+        call    srxbittbl       ;
+        bsf     STATUS,RP0      ;bank 1
+        movwf   srxcnt_d        ;save
+        movwf   srxcnt          ;
+        bcf     STATUS,RP0      ;bank 0
+        return                  ;
+        
+srxbittbl
+        addwf   PCL,f           ;
+        retlw   0               ;0: no control system
+        retlw   d'40'           ;1: Doug Hall - 5 bytes
+        retlw   d'24'           ;2: Palomar RB1 - 3 bytes
+        retlw   0               ;3: not used
+        retlw   0               ;4: not used
+        retlw   0               ;5: not used
+        retlw   d'48'           ;6: Palomar RB2 - 6 bytes
+        retlw   0               ;7: not used
+        retlw   0               ;8: not used
+        retlw   0               ;9: not used
+        retlw   d'72'           ;10: Palomar RB3 - 9 bytes
+        retlw   0               ;11: not used
+        retlw   0               ;12: not used
+        retlw   0               ;13: not used
+        retlw   d'96'           ;14: Palomar RB4 - 12 bytes
+        retlw   0               ;15: not used
+
+        global  cnv_ctrlsys
+cnv_ctrlsys
+        movlw   high cnvjmptbl  ;
+        movwf   PCLATH          ;
+        swapf   Config0,w       ;get control system type
+        andlw   0xf             ;
+        addwf   PCL,f           ;
+cnvjmptbl
+        return                  ;0: no control system
+        goto    cnv_generic     ;1: Doug Hall
+        goto    cnvcactus       ;2: Palomar RB1
+        return                  ;3: not used
+        return                  ;4: not used
+        return                  ;5: not used
+        goto    cnvcactus       ;6: Palomar RB2
+        return                  ;7: not used
+        return                  ;8: not used
+        return                  ;9: not used
+        goto    cnvcactus       ;10: Palomar RB3
+        return                  ;11: not used
+        return                  ;12: not used
+        return                  ;13: not used
+        goto    cnvcactus       ;14: Palomar RB4
+        return                  ;15: not used
+
+gensetpwr
+        addwf   PCL,f           ;
+        goto    lowpower        ;0 = lower power
+        goto    highpower       ;1 = high power
+        goto    normalpower     ;2 = medium power
+        return                  ;3 = no power change
+
+lowpower
+        ;set code plug bit for low power
+        bcf     code_8,2
+        btfss   ConfUF,CONFIG_QRP       ;don't set output bit if user output
+        bsf     PORTD,CONFIG_QRP
+        btfss   ConfUF,CONFIG_HI_PWR    ;don't set output bit if user output
+        bcf     PORTD,CONFIG_HI_PWR
+        return
+        
+normalpower
+        ;set code plug bit for high power
+        bsf     code_8,2
+        btfss   ConfUF,CONFIG_QRP       ;don't set output bit if user output
+        bcf     PORTD,CONFIG_QRP
+        btfss   ConfUF,CONFIG_HI_PWR    ;don't set output bit if user output
+        bcf     PORTD,CONFIG_HI_PWR
+        return
+        
+highpower
+        ;set code plug bit for high power
+        bsf     code_8,2
+        btfss   ConfUF,CONFIG_QRP       ;don't set output bit if user output
+        bcf     PORTD,CONFIG_QRP
+        btfss   ConfUF,CONFIG_HI_PWR    ;don't set output bit if user output
+        bsf     PORTD,CONFIG_HI_PWR
         return
         
         ;END of PROG1 code new ADD new PROG1 code here
