@@ -19,6 +19,12 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.3  2004/12/31 00:44:00  Skip Hansen
+; 1. Added sync data debug variables srx*_d and srxgood, stxgood.
+; 2. Modified sync data ISR to disable reception after srxcnt bit have been
+;    received.
+; 3. Removed patch kludges, all changes are now in line, life is too short!
+;
 ; Revision 1.2  2004/07/24 20:11:58  Skip Hansen
 ; Version 0.10 changes:
 ; 1. Moved ISR back to bank 4 !! Bank 4's "table" jumps to vfo0 ... which
@@ -48,7 +54,7 @@
         extern  sendmode,CanSend
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
-        extern  vfoscanfix,changemode1,setmodeadr3,setmodeadr4
+        extern  icomflags
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -91,7 +97,7 @@ DivB_0  res     1       ;10 bits
 DivB_1  res     1
 
 ;VCO frequency in Hz
-;NB keep fvco_* and N1_* together, they are used as a 16 byte buffer for
+;NB keep fvco_* and N1_* together, they are used as a 8 byte buffer for
 ;transfering the VCO split frequencies
 
 fvco_0  res     1       ;msb
@@ -114,7 +120,7 @@ LoopCnt res     1
 ; -------------------------------------------------------------------------
 ;The following must remain in order as they are read from EEROM on powerup
 
-        global  code_0,code_4,code_5,code_9,code_a
+        global  code_0,code_4,code_5,code_8,code_9,code_a
 code_0  res     1       ;nonpriority scan list M1->M8
 code_1  res     1       ;nonpriority scan list M9->M16
 code_2  res     1       ;nonpriority scan list M17->M24
@@ -167,15 +173,40 @@ mode    res     1
 
 DATA1   udata
 ;serial clock & data from control system - Bank 1 RAM
-srx5    res     1               ;last byte clocked in
+srx5    res     1               ;last byte clocked in (all modes)
 srx4    res     1               ;
-srx3    res     1               ;
+srx3    res     1               ;first byte clocked in (Palomar mode)
 srx2    res     1               ;
-srx1    res     1               ;first byte clocked in
+srx1    res     1               ;first byte clocked in (Doug Hall mode)
 
 srxbits res     1               ;number of bits clocked in from BCD port
 srxto   res     1
+        
+        global  srxcnt
+        
+;Number of sync bits left to shift in before stopping.
+;Used in Palomar/Cactus mode to select the correct remote base from the 
+;serial stream
+srxcnt  res     1
 
+
+;Copy of above variables at last sync data timeout for debug
+        global  srx5_d
+srx5_d  res     1               ;last byte clocked in (all modes)
+srx4_d  res     1               ;
+srx3_d  res     1               ;first byte clocked in (Palomar mode)
+srx2_d  res     1               ;
+srx1_d  res     1               ;first byte clocked in (Doug Hall mode)
+
+srxbits_d res   1               ;number of bits clocked in from BCD port
+        global  srxto_d
+srxto_d res     1               ;number of sync data timeouts
+
+srxcnt_d res    1               ;number of bits clocked in from BCD port
+        global  srxgood         ;
+srxgood res     1               ;number of frames that set a RX frequency
+        global  stxgood         ;
+stxgood res     1               ;number of frames that set a TX frequency
 
         ; Start at the reset vector
 STARTUP code
@@ -253,11 +284,16 @@ isr1    btfss   PIR2,CCP2IF     ;serial clock interrupt ?
         btfsc   SERAL_DAT       ;jump if so
         bsf     STATUS,C        ;
         bsf     STATUS,RP0      ;bank 1
+        movf    srxcnt,f        ;any bits left to receive?
+        btfsc   STATUS,Z        ;
+        goto    isr2            ;nope
         rrf     srx5,f          ;
         rrf     srx4,f          ;
         rrf     srx3,f          ;
         rrf     srx2,f          ;
         rrf     srx1,f          ;
+        decf    srxcnt,f        ;bump count of bits received
+isr2        
         incf    srxbits,f       ;increment bit count
         clrf    srxto           ;clear timeout counter
         bcf     STATUS,RP0      ;bank 0
@@ -418,6 +454,24 @@ startup1
         movwf   INTCON          ;
         bcf     STATUS,RP0      ;bank 0
 
+        ;temp routine to clear scanning bits from vfo data in EEPROM
+        ;to workaround version 0.09 bug that left scanning enabled
+        clrf    memchan         ;load mode 1 from EEPROM
+        movlw   high recallmode ;
+        movwf   PCLATH
+        call    recallmode      ;
+        
+        ;Disable scan for now
+        movlw   0x80            ;
+        movwf   code_9          ;
+        movwf   code_a          ;
+        
+        BSF     STATUS,RP0      ;Bank 1
+        clrf    srxto_d         ;
+        clrf    srxgood         ;
+        clrf    stxgood         ;
+        BCF     STATUS,RP0      ;Bank 0
+
         ifdef  VHF_RANGE_1
         ;VHF range 1 radio, tx vco split
         ;144000000 = 8954400
@@ -545,11 +599,6 @@ startup
         movlw   high startup1   ;
         movwf   PCLATH
         call    startup1        ;
-
-        clrf    memchan         ;load mode 1 from EEPROM
-        movlw   high vfoscanfix ;
-        movwf   PCLATH
-        call    vfoscanfix      ;
         
         ifdef   TEST_GENERIC
         movlw   CONFIG_2M       ;
@@ -583,6 +632,25 @@ startup
         movwf   srxbits         ;
         clrf    srxto           ;clear timeout counter
         bcf     STATUS,RP0      ;bank 0
+        endif
+        
+        ifdef   TEST_PALOMAR
+        movlw   0x23            ;
+        movwf   Config0         ;
+        movlw   0xee            ;load 146.76, 123.0
+        movwf   AARGB2          ;
+        movlw   0x9f            ;
+        movwf   AARGB3          ;
+        movlw   0x98            ;
+        movwf   BARGB0          ;
+        movlw   d'48'           ;
+        movwf   BARGB1          ;
+        bsf     STATUS,RP0      ;bank 1
+        clrf    srxto           ;clear timeout counter
+        clrf    srxcnt          ;
+        bcf     STATUS,RP0      ;bank 0
+
+        call    cnvcactus
         endif
 
 mainloop
@@ -636,33 +704,45 @@ main4
         bcf     PIE2,CCP2IE     ;disable further clock interrupt while
                                 ;processing the data
 
+        incf    srxto_d,w       ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    srxto_d,f       ;
+        
         ;copy srx1...srx5 into Bank0 for the conversion routines
         movf    srx1,w          ;
+        movwf   srx1_d
         bcf     STATUS,RP0      ;bank 0
         movwf   AARGB0          ;
+        bcf     icomflags,COM_FLAG_RX_SET ;clear RX frequency set flag
+        bcf     icomflags,COM_FLAG_TX_SET ;clear TX frequency set flag
 
         bsf     STATUS,RP0      ;bank 1
         movf    srx2,w          ;
+        movwf   srx2_d
         bcf     STATUS,RP0      ;bank 0
         movwf   AARGB1          ;
 
         bsf     STATUS,RP0      ;bank 1
         movf    srx3,w          ;
+        movwf   srx3_d
         bcf     STATUS,RP0      ;bank 0
         movwf   AARGB2          ;
 
         bsf     STATUS,RP0      ;bank 1
         movf    srx4,w          ;
+        movwf   srx4_d
         bcf     STATUS,RP0      ;bank 0
         movwf   AARGB3          ;
 
         bsf     STATUS,RP0      ;bank 1
         movf    srx5,w          ;
+        movwf   srx5_d
         bcf     STATUS,RP0      ;bank 0
         movwf   BARGB0          ;
 
         bsf     STATUS,RP0      ;bank 1
         movf    srxbits,w       ;
+        movwf   srxbits_d       ;
         bcf     STATUS,RP0      ;bank 0
         movwf   BARGB1          ;
 
@@ -681,22 +761,37 @@ main3   goto    main2           ;no control system configured
         goto    cactus          ;
         goto    main2           ;not used
 
-        ;Generic mode, we should have exactly 5 bytes of data
-generic movf    BARGB1,w        ;
-        sublw   d'40'           ;
-        btfsc   STATUS,Z        ;
+generic
         call    cnv_generic     ;
         goto    main2           ;
 
-        ;Cactus mode, we should have exactly 3 bytes of data
-cactus  movf    BARGB1,w        ;
-        sublw   d'24'           ;
-        btfsc   STATUS,Z        ;
+        ;Cactus mode
+cactus  
         call    cnvcactus       ;
 
 main2   bsf     STATUS,RP0      ;bank 1
+        movf    srxcnt,w        ;
+        movwf   srxcnt_d        ;save
         clrf    srxbits         ;reset for next time
         clrf    srxto           ;
+        bcf     STATUS,RP0      ;bank 0
+        btfss   icomflags,COM_FLAG_TX_SET
+        goto    txnotset        ;
+        bsf     STATUS,RP0      ;bank 1
+        
+        incf    stxgood,w       ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    stxgood,f       ;
+        bcf     STATUS,RP0      ;bank 0
+        
+txnotset        
+        btfss   icomflags,COM_FLAG_RX_SET
+        goto    main1           ;
+        bsf     STATUS,RP0      ;bank 1
+        
+        incf    srxgood,w       ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    srxgood,f       ;
 
 main1   bcf     STATUS,RP0      ;bank 0
         goto    mainloop
@@ -749,11 +844,11 @@ SaveMode
         btfsc   LastC,5         ;
         iorlw   0x10
         movwf   mode            ;
-        ifdef   V009
+        ;turn off the output driver for the mode 6 output
+        bsf     STATUS,RP0      ;bank 1
+        bsf     TRISC,0         ;disable output
+        bcf     STATUS,RP0      ;bank 0
         return
-        else
-        goto    mode6ts         ;turn off mode 6 buffer 
-        endif
 
 CLookup
         movlw   high CLookup
@@ -1368,30 +1463,21 @@ setrx2  iorwf   code_b,f
 
 ;toggle the mode output line to force the Syntor to re-read the code plug
         global  changemode
-        ifdef   V009
 changemode
         btfss   PORTC,0         ;
         goto    setmodehigh     ;
-        bcf     PORTC,0         ;
+        bsf     STATUS,RP0      ;bank 1
+        bcf     TRISC,0         ;enable output
+        bcf     STATUS,RP0      ;bank 0
+        bcf     PORTC,0         ;set the output low
         return
 
 setmodehigh
-        bsf     PORTC,0         ;
-        return
-        
-        else    ;v 0.10 code
-changemode
-        goto    changemode1     ;patch
-        nop
-
-mode6ts
-        ;turn off the output driver for the mode 6 output
         bsf     STATUS,RP0      ;bank 1
-        bsf     TRISC,0         ;disable output
+        bcf     TRISC,0         ;enable output
         bcf     STATUS,RP0      ;bank 0
+        bsf     PORTC,0         ;set the output high
         return
-        endif
-        
 
 ;Set Rx & Tx PL frequencies to the Comm Spec number in W
         global  SetPL           ;
@@ -1538,19 +1624,12 @@ setmodeadr
         goto    setmodeadr2     ;continue
         
 setmodeadr1
-        ifdef   V009
+        movwf   LoopCnt         ;
         bcf     STATUS,C        ;memchan * 16
-        rlf     memchan,f
-        rlf     memchan,f
-        rlf     memchan,f
-        rlf     memchan,f
-        else
-        call    setmodeadr3
         rlf     LoopCnt,f
         rlf     LoopCnt,f
         rlf     LoopCnt,f
         rlf     LoopCnt,f
-        endif
 
         BSF     STATUS,RP1      ;Bank 2
 
@@ -1568,11 +1647,12 @@ setmodeadr1
 
 setmodeadr2
         BCF     STATUS,RP0      ;Bank 2
-        ifdef   V009
+        movlw   0x34            ;ms 6 bits of retlw instruction
+        MOVWF   EEDATH          ;
+        BCF     STATUS,RP1      ;Bank 0
+        movlw   d'16'           ;16 bytes to program
+        movwf   LoopCnt         ;
         movlw   low code_0      ;
-        else
-        call    setmodeadr4
-        endif
         movwf   FSR             ;
         return
         
@@ -1596,21 +1676,7 @@ write32ee
 ;Program code_0 -> code_f into specified mode in flash
 ;
         global  prgmode
-        ifdef   V009
-prgmode movlw   d'16'           ;16 bytes to program
-        movwf   LoopCnt         ;
-        call    setmodeadr
-        movlw   0x34            ;ms 6 bits of retlw instruction
-        MOVWF   EEDATH          ;
-        BCF     STATUS,RP1      ;Bank 0
-        else
-        nop
-        nop
-        nop
-        nop
-        nop
 prgmode call    setmodeadr
-        endif
         call    prg_loop        ;
         goto    changemode      ;force Syntor to reload current channel & return
 
