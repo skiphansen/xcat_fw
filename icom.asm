@@ -1,4 +1,14 @@
 ;$Log: icom.asm,v $
+;Revision 1.3  2004/12/31 00:39:11  Skip Hansen
+;1. Removed all patch kludges!  Too hard to keep track of.  Code is now
+;   just inline.
+;2. Set a flag when a Rx and Tx frequency is set for debugging control
+;   system communications.
+;3. Added CI-V command 0xaa, 0x9 to retrieve debug data for sync comms.
+;4. Bumped version number to 0.11.
+;5. Modified Generic data routine to accept 5 or 7 bytes of data.
+;6. Major modifications to Palomar support.  It might even work now!
+;
 ;Revision 1.2  2004/07/24 20:05:50  Skip Hansen
 ;Version 0.10 changes:
 ;1. Modified CanSend to return false when already sending.
@@ -22,11 +32,11 @@ DATA0           udata
                 global  memchan
 memchan         res     1       ; 1 -> 31
 
-
+                global  icomflags
 icomflags       res     1       ;bit0 = 0 bcd convert msb first (ctcss)
                                 ;bit0 = 1 bcd convert lsb first (freq)
                                 ;bit1 = 1 Generic data routine, tx offset mode
-                                ;
+                                ;bit2 = 1 Rx Frequency set successfully
 
 DATA1           udata
 
@@ -101,7 +111,8 @@ PROG2           code
         extern  TxOff_3,TxOff_2,TxOff_1,TxOff_0
         extern  readee
 
-        extern  mode,Config0,ConfUF,code_0,code_9,code_a
+        extern  mode,Config0,ConfUF,code_0,code_8,code_9,code_a,srxcnt
+        extern  srx5_d,srxto_d,srxgood,stxgood
 
 #define LoopCntr        DivA
 #define temp_0          fvco_0
@@ -345,20 +356,6 @@ txstate5
         movwf   NextTxState     ;
         goto    txstate2        ;
         
-        ;temp routine to clear scanning bits from vfo data in EEPROM
-        ;to workaround version 0.09 bug that left scanning enabled
-        global  vfoscanfix
-vfoscanfix
-        movlw   high recallmode ;
-        movwf   PCLATH
-        call    recallmode      ;
-        
-        ;Disable scan for now
-        movlw   0x80            ;
-        movwf   code_9          ;
-        movwf   code_a          ;
-        return
-        
         ;END of PROG2 code new ADD new PROG2 code here
 
 PROG1   code
@@ -367,14 +364,9 @@ PROG1   code
         global  CanSend
 CanSend BSF     STATUS,RP0      ;Bank 1
         movf    rxstate,w       ;
-        if      0        
+        iorwf   txstate,w       ;
         BCF     STATUS,RP0      ;Bank 0
         return
-        else
-        goto    CanSend1        ;continue
-        nop        
-        endif
-
 
 ;signal report <cmd0xaa><sub code 0x81><mode><0/1>
         global  sendmode
@@ -418,7 +410,7 @@ execcmd clrf    rxstate         ;back to looking for another command
         movwf   LoopCntr
         movlw   low Data_4      ;msb of data
         movwf   FSR
-        bsf     icomflags,0     ;lsb first
+        bsf     icomflags,COM_FLAG_LSB1ST ;lsb first
         call    bcd2bin
 
 ;copy new frequency to transmit and receive frequency
@@ -457,7 +449,7 @@ trycmd8 movlw   0x8             ;Command 8 ?
         movwf   LoopCntr
         movlw   low Data_0      ;msb of data
         movwf   FSR
-        bcf     icomflags,0     ;msb first
+        bcf     icomflags,COM_FLAG_LSB1ST ;msb first
         call    bcd2bin
         movlw   d'32'           ;> 31 ?
         subwf   temp_3,w        ;
@@ -544,7 +536,7 @@ trycmd1b
         movlw   2               ;convert 4 BCD digits
         movwf   LoopCntr
         movlw   low Data_1      ;msb of data
-        bcf     icomflags,0     ;msb first
+        bcf     icomflags,COM_FLAG_LSB1ST ;msb first
         movwf   FSR
         call    bcd2bin
 
@@ -608,12 +600,14 @@ trycmdaa
 ; 0x07 - get VCO split frequencies
 ; 0x87 - get VCO split frequencies response
 ; 0x08 - set VCO split frequencies
+; 0x09 - get sync data debug info
+; 0x89 - get sync data debug response
 ;
 ;  Cmd     Data_0         Data_1 ... Data_16
 ; <0xaa>   [0x01 | 0x80 ]  <16 bytes of raw data in code plug format>
 ;
 ;
-        movlw   9               ;> max sub command ?
+        movlw   d'10'           ;> max sub command ?
         subwf   Data_0,w        ;
         btfsc   STATUS,C        ;
         goto    SendNG          ;
@@ -630,6 +624,7 @@ aasub   addwf   PCL,f
         goto    SetTxOffset     ;6 - set Tx offset
         goto    GetVcoSplitF    ;7 - get VCO split frequencies
         goto    SetVcoSplitF    ;8 - set VCO split frequencies
+        goto    GetSyncDebug    ;9 - get sync data debug info
 
 ;subcommand 0: get raw VFO data
 getcpdat
@@ -670,7 +665,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'1'            ;
         movwf   Data_5          ;
-        movlw   a'0'            ;
+        movlw   a'1'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -793,6 +788,17 @@ SetVcoSplitF
         movwf   LoopCnt         ;
         movlw   RX_VCO_SPLIT_F  ;
         goto    Write0ToEEPROM  ;into EEPROM
+
+;subcommand 9 - get sync data debug info
+GetSyncDebug
+        movlw   5               ;continue @ txstate 5
+        movwf   NextTxState     ;
+        movlw   low srx5_d      ;
+        movwf   txdpointer      ;
+        movlw   d'10'           ;10 bytes to send
+        movwf   txdatacount     ;
+        movlw   0x89            ;
+;       goto    sendxcatresp    ;kick it off
         
 sendxcatresp
         movwf   Data_0          ;update subcommand for the response
@@ -859,7 +865,7 @@ bcd1    BSF     STATUS,RP0      ;Bank 1
         BCF     STATUS,RP0      ;Bank 0
         call    addw2temp
         movlw   1               ;add 1 if msb first
-        btfsc   icomflags,0
+        btfsc   icomflags,COM_FLAG_LSB1ST
         movlw   0xff            ;subtract 1 if lsb first
         addwf   FSR,f
         decfsz  LoopCntr,f
@@ -977,17 +983,20 @@ SetFreqs
         call    setrxf          ;
         btfsc   STATUS,Z        ;
         return                  ;error setting rx frequency
+        bsf     icomflags,COM_FLAG_RX_SET       ;
+        
         call    settxf          ;
-;load the new frequencies into into the radio even if the
-;attempt to set a rx frequency failed.  This allows us to 
-;*listen* out of band.
         btfsc   STATUS,Z        ;
         goto    changebad       ;
         call    changemode      ;
+        bsf     icomflags,COM_FLAG_TX_SET       ;
         iorlw   0x1             ;clear zero flag
         return                  ;
                 
 changebad
+;load the new frequencies into into the radio even if the
+;attempt to set a tx frequency failed.  This allows us to 
+;*listen* out of band.
         call    changemode      ;
         clrw                    ;set zero flag
         return                  ;
@@ -1042,14 +1051,23 @@ copy1_0 movf    Data_0,w        ;get from address
 ;                 B5 0, B4 0 = low
 ;                 B5 1, B4 0 = medium
 ;                 B5 0, B4 1 = high
+;                 B5 1, B4 1 = no power change
 ;          B0 -> B3 Band select:
 ;                 0 - UHF 430   (43x.xxx Mhz)
+;                 1 - 1250      (125x.xxx Mhz)
 ;                 2 - 2 meters  (14x.xxx Mhz)
 ;                 3 - 220       (22x.xxx Mhz)
 ;                 4 - UHF 440   (44x.xxx Mhz)
+;                 5 - 1270      (127x.xxx Mhz)
+;                 6 - 1280      (128x.xxx Mhz)
+;                 7 - 1290      (129x.xxx Mhz)
+;                 8 - 1260      (126x.xxx Mhz)
+;                 9 - 1240      (124.xxx Mhz)
 ;                 A - UHF 420   (42x.xxx Mhz)
+;                 B - 900       (90x.xxx Mhz)
 ;                 C - 6 meters  (05x.xxx Mhz)
 ;                 D - 10 meters (02x.xxx Mhz)
+;                 E - 130 Mhz   (13x.xxx Mhz)
 ;               If the band select nibble is not in the above list then
 ;               the frequency will be used as the transmitter offset for
 ;               duplex operations.
@@ -1057,9 +1075,10 @@ copy1_0 movf    Data_0,w        ;get from address
 ;  Byte 3: B7 - Radio power, 1 = on
 ;          B6 - 5 Khz bit, 1 = +5 Khz
 ;          B5 -> B4 Offset:
-;               B5 0, B4 1 = positive
+;               B5 0, B4 0 = negative Tx offset
+;               B5 0, B4 1 = positive Tx offset
 ;               B5 1, B4 0 = simplex
-;               B5 0, B4 0 = negative
+;               B5 1, B4 1 = negative 20 Mhz Tx offset (1200 radios only)
 ;          B0 -> B3 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
 ;
 ;  Byte 4: B4 -> B7 100 Khz digit
@@ -1068,6 +1087,16 @@ copy1_0 movf    Data_0,w        ;get from address
 ;  Byte 5: B7 - 1 = PL decode enable
 ;          B6 - 1 = PL encode enable
 ;          B0 -> B5 = PL tone (Communications Specialists TS64 number)
+;
+;  (Byte 6 and 7 are currently ignored by the Xcat)
+;  Byte 6: B4 -> B7 Rx level
+;          B0 -> B3 Squelch level
+;
+;  Byte 7: B4 -> B7 Memory channel
+;          B3 - Memory channel 16
+;          B2 - Memory save
+;          B1 - Open squelch
+;          B0 - Scan on
 ;
 ;1 = 67.0Hz 2 = 71.9Hz 3 = 74.4Hz 4 = 77.0Hz 5 = 79.7Hz
 ;6 = 82.5Hz 7 = 85.4Hz 8 = 88.5Hz 9 = 91.5Hz 10 = 94.8Hz
@@ -1082,7 +1111,21 @@ copy1_0 movf    Data_0,w        ;get from address
 ;------------------------------------------------------------------------------
         global  cnv_generic
 cnv_generic
-        bcf     icomflags,1     ;Not Tx frequency select (yet)
+        ;set the number of bits to receive for the next time
+        bsf     STATUS,RP0      ;bank 1
+        movlw   d'40'           ;5 bytes / remote
+        movwf   srxcnt          ;
+        bcf     STATUS,RP0      ;bank 0
+        subwf   BARGB1,w        ;
+        btfsc   STATUS,Z        ;
+        goto    cnv_generic1    ;
+        movlw   d'56'           ;7 bytes ?
+        subwf   BARGB1,w        ;
+        btfss   STATUS,Z        ;
+        return
+        
+cnv_generic1
+        bcf     icomflags,COM_FLAG_TXOFF ;Not Tx frequency select (yet)
         movf    srx2,w          ;get 2'nd byte from serial stream
         andlw   0xf             ;
         movwf   temp_0          ;save
@@ -1134,7 +1177,7 @@ gen3    movlw   1               ;10 meters ?
         subwf   temp_0,w        ;
         btfsc   STATUS,Z        ;
         ;Not a known frequency band, assume it's a transmitter offset
-        bsf     icomflags,1     ;Tx frequency select
+        bsf     icomflags,COM_FLAG_TXOFF ;Tx frequency select
         clrw                    ;
         goto    gensetband      ;
 
@@ -1179,7 +1222,7 @@ gensetband
 
 gen4    call    tempx10         ;
         call    tempx10         ;
-        btfsc   icomflags,1     ;
+        btfsc   icomflags,COM_FLAG_TXOFF        ;
         goto    settxoff        ;
 ;copy new frequency to transmit and receive frequency
         call    setrxtx         ;
@@ -1203,6 +1246,7 @@ gensimplex
         andwf   PORTD,w         ;get bits we're keeping
         iorwf   srx1,w          ;or in UF bits
         movwf   PORTD           ;output new port D bits
+        ;TODO: set high/medium/low power
         goto    SetFreqs        ;
 
 genplus call    PlusOffset      ;
@@ -1222,22 +1266,33 @@ settxoff
 
 ;
 ;Cactus format:  LSB of byte 1 shifted out first
+;NB: Clock and data lines are inverted, the following is shown as true logic.
+;3, 6, 9, or 12 bytes are clocked out depending on the number of remote bases
+;the software has been configured for.  The original hardware had a seperate 
+;load line which was used to transfer the data from the shift register into
+;a parallel latch to driver the radio.
+;The Xcat is configured to know which set of 3 bytes to look at after a timeout
+;rather than trying to use the (too narrow) load pulse.
+;RBC-700 
+
 ;
 ;  Byte 1: B7 - not used
-;          B6 - 0 = PL encode enable, 1 = PL encode enable
-;          B0 -> B5 = PL tone (Communications Specialists TS32 number)
+; (srx3)   B6 - not used
+;          B5 - 0 = PL encode enabled, 1 = PL encode disabled
+;          B0 -> B4 = PL tone (Communications Specialists TS32 number)
 ;
 ;  Byte 2: B4 -> B7 10 Khz digit
-;          B3 - 5 Khz bit
+; (srx4)   B3 - 5 Khz bit
 ;          B2 - not used
 ;          B1 - 1 = high power level
 ;          B0 - 1 = QRP power level
 ;
 ;  Byte 3: B4 -> B7 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
-;          B0 -> B3 100 Khz digit
+; (srx5)   B0 -> B3 100 Khz digit
 ;
 ;
-;Communications Specialists TS32 number numbers:
+;Communications Specialists TS32 number numbers (binary value + 1):
+;
 ;     C.T.C.S.S.   EIA
 ;          FREQ.   CODE
 ;======================
@@ -1277,10 +1332,83 @@ settxoff
 
         global  cnvcactus
 cnvcactus
-        movfw   srx1            ;get PL code
-        andlw   0x3f            ;
+        ;all of the data bits should have been shifted in by now
+        bsf     STATUS,RP0      ;bank 1
+        movf    srxcnt,f        ;
+        bcf     STATUS,RP0      ;bank 0
+        btfss   STATUS,Z        ;
+        clrf    srxbits         ;Clear srxbits to force an error later
+
+;calculate the number of bits to receive for the next time
+        
+        movf    Config0,w       ;Get configuration byte
+        bsf     STATUS,RP0      ;bank 1
+        movwf   rxbyte          ;
+        ;shift bits into place
+        rlf     rxbyte,f        ;
+        rlf     rxbyte,f        ;
+        rlf     rxbyte,f        ;
+        movlw   0x3             ;
+        andwf   rxbyte,f        ;
+        incf    rxbyte,f        ;rxbyte = remote base # 1 -> 4
+        
+        clrf    srxcnt          ;
+        movlw   d'24'           ;3 bytes / remote
+cactus6 addwf   srxcnt,f        ;
+        decfsz  rxbyte,f        ;
+        goto    cactus6         ;loop
+        bcf     STATUS,RP0      ;bank 0
+
+;In cactus mode we should have N x 3 bytes of serial data were
+;N = 1, 2, 3 or 4.
+        subwf   srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'48'           ;6 bytes ?
+        subwf   srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'72'           ;9 bytes ?
+        subwf   srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'96'           ;12 bytes ?
+        subwf   srxbits,w       ;
+        btfss   STATUS,Z        ;
+        return                  ;nope !
+
+        ;we have a sane number of bits
+cactus1
+        ;data passes initial tests our data is in srx5 .. srx3
+        ;data is inverted, fix it
+        comf    srx5,f          ;
+        comf    srx4,f          ;
+        comf    srx3,f          ;
+        
+        ;Set tx power level outputs
+        btfsc   srx4,0          ;
+        goto    cactus3         ;not QRP
+        bsf     PORTD,CONFIG_QRP
+        ;set code plug bit for low power
+        bcf     code_8,2
+        goto    cactus4
+cactus3
+        bcf     PORTD,CONFIG_QRP
+        ;set code plug bit for high power
+        bsf     code_8,2
+
+cactus4        
+        btfsc   srx4,1          ;
+        goto    cactus5         ;not high power
+        bsf     PORTD,CONFIG_HI_PWR
+        goto    cactus2
+cactus5
+        bcf     PORTD,CONFIG_HI_PWR
+        
+cactus2 movfw   srx3            ;get PL code
+        andlw   0x1f            ;
         call    SetPL           ;set it
-        btfss   srx1,6          ;jump if PL encode is enabled
+        btfsc   srx3,5          ;jump if PL encode is enabled
         call    SetTxCS         ;disable PL encode
         ;cactus is always carrier squelch on receive ?
         call    SetRxCS         ;disable PL decode
@@ -1291,24 +1419,27 @@ cnvcactus
         call    crcmhzlookup    ;
 
         ;w = BCD for Mhz hunderds and tens
-        movwf   temp_0          ;Init temp w 100Mhz digit, 10Mhz digit
-        clrf    temp_1          ;
+        movwf   temp_3          ;Init temp w 100Mhz digit, 10Mhz digit
         clrf    temp_2          ;
-        clrf    temp_3          ;
+        clrf    temp_1          ;
+        clrf    temp_0          ;
         call    tempx10         ;
-        call    tempx10         ;
-        swapf   srx3,w          ;get Mhz digit
+        swapf   srx5,w          ;get Mhz digit
         call    addw2temp       ;
         call    tempx10         ;
-        movf    srx3,w          ;get 100Khz digit
+        movf    srx5,w          ;get 100Khz digit
         call    addw2temp       ;
         call    tempx10         ;
-        swapf   srx2,w          ;get 10Khz digit
+        swapf   srx4,w          ;get 10Khz digit
         call    addw2temp       ;
         call    tempx10         ;
         movlw   5               ;
-        btfsc   srx2,3          ;jump if not +5 Khz
+        btfsc   srx4,3          ;jump if not +5 Khz
         call    addw2temp       ;
+        call    tempx10         ;
+        call    tempx10         ;
+        call    tempx10         ;
+        
 ;copy new frequency to transmit and receive frequency
         call    setrxtx         ;
         goto    SetFreqs        ;
@@ -1317,55 +1448,22 @@ crcmhzlookup
         addwf   PCL,f
         retlw   2               ;10 meters 2x.xxx
         retlw   5               ;6 meters 5x.xxx
-        retlw   d'14'           ;2 meters 14x.xxx
         retlw   5               ;6 & 10 default to 5x.xxx
+        retlw   d'14'           ;2 meters 14x.xxx
         retlw   d'44'           ;44x.xxxx
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
 
-;return with zero flag set if it's ok to send (patch)
-CanSend1
-        iorwf   txstate,w       ;
-        BCF     STATUS,RP0      ;Bank 0
-        return
-
 changeok1
         call    changemode      ;
         goto    SendOk          ;
-
-;toggle the mode output line to force the Syntor to re-read the code plug
-        global  changemode1
-changemode1
-        btfss   PORTC,0         ;
-        goto    setmodehigh     ;
-        bsf     STATUS,RP0      ;bank 1
-        bcf     TRISC,0         ;enable output
-        bcf     STATUS,RP0      ;bank 0
-        bcf     PORTC,0         ;set the output low
-        return
 
 setmodehigh
         bsf     STATUS,RP0      ;bank 1
         bcf     TRISC,0         ;enable output
         bcf     STATUS,RP0      ;bank 0
         bsf     PORTC,0         ;set the output high
-        return
-
-        global  setmodeadr3
-setmodeadr3
-        movwf   LoopCnt         ;
-        bcf     STATUS,C        ;memchan * 16
-        return                  ;
-
-        global  setmodeadr4
-setmodeadr4                
-        movlw   0x34            ;ms 6 bits of retlw instruction
-        MOVWF   EEDATH          ;
-        BCF     STATUS,RP1      ;Bank 0
-        movlw   d'16'           ;16 bytes to program
-        movwf   LoopCnt         ;
-        movlw   low code_0      ;
         return
         
         ;END of PROG1 code new ADD new PROG1 code here
