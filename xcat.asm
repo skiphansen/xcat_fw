@@ -19,6 +19,9 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.6  2007/02/03 15:13:44  Skip
+; Added test of B1_FLAG_RESET to main loop.
+;
 ; Revision 1.5  2005/01/05 05:10:02  Skip Hansen
 ; 1. Added debug counter, srxbad, to count invalid sync frames received.
 ; 2. Clear *all* RAM at power up.
@@ -66,7 +69,7 @@
         extern  sendmode,CanSend
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
-        extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags
+        extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags,txstate
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -735,7 +738,20 @@ main4
         btfsc   TXSTA,TRMT
         endif                   ;
         call    txdata          ;
-        bcf     STATUS,RP0      ;bank 0
+        movlw   high main2      ;
+        movwf   PCLATH          ;
+        movf    txstate,w
+        btfss   STATUS,Z        ;
+        goto    main2           ;
+        
+        btfss   b1flags,B1_FLAG_RESET   ;
+        goto    main2           ;
+        ;reset !        
+        movlw   0               ;
+        movwf   PCLATH          ;
+        goto    0               ;
+        
+main2   bcf     STATUS,RP0      ;bank 0
         movlw   high SaveMode   ;
         movwf   PCLATH          ;
         call    SaveMode        ;
