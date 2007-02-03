@@ -1,4 +1,8 @@
 ;$Log: icom.asm,v $
+;Revision 1.6  2007/02/03 15:12:58  Skip
+;1. Removed test of B1_FLAG_RESET from txstate0.
+;2. Changed version string to 0.25.
+;
 ;Revision 1.5  2005/01/05 05:19:24  Skip Hansen
 ;1. Added SetCommunications parameter command 0xaa, 0xa.
 ;2. Modified SetConfiguration command to reset after Ack has been sent.
@@ -97,6 +101,7 @@ Data_17         res     1
 DataP           res     1       ;rx data pointer (NB: must follow last Data_x)
 
 ;CI-V transmit variables - in Bank 1 RAM
+                global  txstate
 txstate         res     1
 NextTxState     res     1
 txcount         res     1
@@ -336,12 +341,7 @@ txdata  movf    txstate,w
 
 ;txstate 0: idle
 txstate0
-        btfss   b1flags,B1_FLAG_RESET   ;
         return                  ;nothing to do
-        ;reset !        
-        movlw   0               ;
-        movwf   PCLATH          ;
-        goto    0               ;
 
 ;txstate 1: Send data from DataP (Bank 1 RAM) until 0xfd or txcount expires
 ;NB: this state is not appropriate for binary data
@@ -733,9 +733,9 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_3          ;
         movlw   a'.'            ;
         movwf   Data_4          ;
-        movlw   a'1'            ;
+        movlw   a'2'            ;
         movwf   Data_5          ;
-        movlw   a'3'            ;
+        movlw   a'5'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -770,7 +770,7 @@ setconfig
         movwf   LoopCnt         ;
         movlw   CONFIG_EEPROM_ADR  ;
 
-        ;write txcount bytes from bank 0 RAM pointed to by FSR into
+        ;write LoopCnt bytes from bank 0 RAM pointed to by FSR into
         ;eeprom address in w, then send OK
 Write0ToEEPROM
         BSF     STATUS,RP1      ;Bank 2
