@@ -1,4 +1,28 @@
 ####################################
+Changes in version 0.25 1/31/2007
+
+Bug fixes:
+In theory these changes should not have effected anything other than operation 
+with the mplab 7.51 emulator, but in practice WD6AWP's xcat was locking up 
+when 145.22 was programmed into his restored version of 0.13. We had
+changed the Doug Hall clock to rising edge for a test (version 0.24), the 
+original 0.13 had been working. For some unknown reason this version fixed 
+the problem.
+
+1. Moved code that caused a reset from communications routine to main loop.
+   The reset is just a jump to zero that occurs after the ack is sent
+   following a set configuration CI-V command.  Moving this to the main
+   loop keeps the stack straight and the emulator happy.
+
+2. Changed the default baudrate from 19200 to 9600 so the UART would be 
+   initialized.  In actual operation the boot loader runs before the main
+   Xcat application and it initialized the baudrate to 19200.  The Xcat
+   app doesn't reinitialize the UART if the baudrate is 19200 which causes
+   the emulator to correctly emulate a noninitialized UART.
+   
+Note: This version is derived from version 0.13, not 0.24.
+
+####################################
 Changes in version 0.13 1/8/2005
 
 New features:
@@ -36,7 +60,9 @@ Changes in version 0.12 12/31/2004 (limited beta release)
 
 Bug fixes:
 1. Corrected enable sense for I/O 5 +2.5 Khz option.
+
 2. Corrected active sense for I/O 5 +2.5 Khz option.
+
 3. Corrected bug in calculations used to add 2.5 Khz, previously 900 hz was 
    added instead of 2500 Hz.  Since 900 hz is not a multiple of any of the
    Syntor's reference frequencies this prevented frequencies from being set
@@ -54,6 +80,7 @@ Minor enhancements:
    debugging of Doug Hall and Palomar related problems.
 
 2. Modified Generic data routine to accept 5 or 7 bytes of data.
+
 3. Major modifications to Palomar support.  It might even work now!
 
 ####################################
