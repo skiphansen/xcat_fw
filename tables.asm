@@ -5,6 +5,9 @@
 ;Ordered by Comm Spec PL number
 ;
 ; $Log: tables.asm,v $
+; Revision 1.3  2007/02/03 15:14:03  Skip
+; Changed default baudrate to 9600 for emulator.
+;
 ; Revision 1.2  2005/01/05 05:02:17  Skip Hansen
 ; Added GetBaudRate, GetCIVAdr.
 ;
@@ -15,7 +18,9 @@
 PL_TBL  code
         global  GetBaudRate
 GetBaudRate
-        retlw   0x4             ;19200
+        retlw   0x3             ;9600 NB: don't make this 4 or the uart
+                                ;won't be initialized which will cause the
+                                ;simulator fail!
         
         global  GetCIVAdr       ;
 GetCIVAdr
