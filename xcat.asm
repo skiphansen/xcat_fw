@@ -19,6 +19,12 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.7  2007/07/06 13:55:10  Skip
+; 1. Modified main loop to wait for Tx to be idle before testing
+;    B1_FLAG_RESET for potential reset.
+; 2. Added clrwdt to mainloop (not tested since it requires a bootloader
+;    and fuse change).
+;
 ; Revision 1.6  2007/02/03 15:13:44  Skip
 ; Added test of B1_FLAG_RESET to main loop.
 ;
@@ -715,6 +721,7 @@ startup
         endif
 
 mainloop
+        clrwdt                  ;kick the dog
         btfss   RCSTA,OERR      ;Overrun error ?
         goto    main4           ;
         ;Clear it !
@@ -723,26 +730,19 @@ mainloop
         bcf     RCSTA,CREN      ;reset the the receiver
         bsf     RCSTA,CREN      ;
         
-main4   
-        movlw   high rxdata     ;
-        movwf   PCLATH          ;
-        ifndef SIMULATE
-        btfsc   PIR1,RCIF       ;
-        endif                   ;
-        call    rxdata          ;
-        
+main4   btfsc   PIR1,RCIF       ;
+        goto    main5           ;Rx ready
+        bsf     STATUS,RP0      ;bank 1
+        btfss   TXSTA,TRMT
+        goto    main2           ;Tx not ready
+
         movlw   high txdata     ;
         movwf   PCLATH          ;
-        bsf     STATUS,RP0      ;bank 1
-        ifndef SIMULATE
-        btfsc   TXSTA,TRMT
-        endif                   ;
         call    txdata          ;
         movlw   high main2      ;
         movwf   PCLATH          ;
-        movf    txstate,w
-        btfss   STATUS,Z        ;
-        goto    main2           ;
+        btfss   TXSTA,TRMT      ;
+        goto    main2           ;The UART hasn't finished sending yet
         
         btfss   b1flags,B1_FLAG_RESET   ;
         goto    main2           ;
@@ -750,6 +750,11 @@ main4
         movlw   0               ;
         movwf   PCLATH          ;
         goto    0               ;
+
+;Rx is ready
+main5   movlw   high rxdata     ;
+        movwf   PCLATH          ;
+        call    rxdata          ;
         
 main2   bcf     STATUS,RP0      ;bank 0
         movlw   high SaveMode   ;
