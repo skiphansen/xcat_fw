@@ -1,4 +1,12 @@
 ;$Log: icom.asm,v $
+;Revision 1.7  2007/07/06 14:16:38  Skip
+;Version 0.26: Modifications to prevent mode change message from being lost
+;during scans (?  It's been 5 months, changes made on 2/3/2007).
+;
+;The modifications at the end of SetCommParam don't look right now, but
+;that's what I just burned into 11 boards and it seems to work.  Committing
+;for history, I'll "fix" it shortly.
+;
 ;Revision 1.6  2007/02/03 15:12:58  Skip
 ;1. Removed test of B1_FLAG_RESET from txstate0.
 ;2. Changed version string to 0.25.
@@ -179,6 +187,8 @@ serialinit
         movwf   PCLATH          ;
         call    GetCIVAdr       ;
         movwf   OurCIVAdr       ;save it
+        clrf    txcount         ;default tx count to max
+        clrf    NextTxState     ;Set next state to idle just for safety
         
         ;initialize UART
         call    GetBaudRate     ;
@@ -385,6 +395,7 @@ txstate2c
         return
         movf    NextTxState,w   ;
         movwf   txstate         ;
+        clrf    NextTxState     ;
         return
 
 txstate2a
@@ -445,6 +456,7 @@ sendmode
         movf    mode,w          ;
         BSF     STATUS,RP0      ;Bank 1
         movwf   Data_1          ;
+        clrf    txcount         ;default tx count to max
         clrf    To_Adr          ;to adr (broadcast)
         movlw   0xaa            ;
         movwf   civ_cmd         ;cmd code
@@ -455,8 +467,7 @@ sendmode
         goto    sendit
 
 execcmd clrf    rxstate         ;back to looking for another command
-        movlw   0xff            ;default tx count to max
-        movwf   txcount         ;
+        clrf    txcount         ;default tx count to max
 
         movlw   5               ;Command 5 ?
         subwf   civ_cmd,w       ;
@@ -735,7 +746,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'2'            ;
         movwf   Data_5          ;
-        movlw   a'5'            ;
+        movlw   a'6'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -903,14 +914,17 @@ SetCommParam
         BSF     STATUS,RP0      ;Bank 1
         movlw   0xfd            ;
         movwf   Data_1          ;EOF
-        movlw   high sendxcatresp ;
-        movwf   PCLATH          ;
         movlw   0x8a            ;
-;       goto    sendxcatresp    ;kick it off
-        
+        movwf   Data_0          ;update subcommand for the response
+        movlw   5               ;send header
+        movlw   high prg_loop   ;
+        movwf   PCLATH          ;
+        goto    sendresp1       ;
+                
 sendxcatresp
         movwf   Data_0          ;update subcommand for the response
         movlw   5               ;send header
+sendresp1
         movwf   txcount         ;
         movf    From_Adr,w      ;copy from adr into
         movwf   To_Adr          ;to adr
