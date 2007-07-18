@@ -19,6 +19,15 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.8  2007/07/18 18:48:34  Skip
+; 1. Added digital squelch port support.
+; 2. Added support for 7 byte Doug Hall/Generic protocol.
+; 3. Massive modifications to code plug data ISR and selmode logic.  See
+;    the detailed and anal comments about "take 3" above changemode
+;    for the gory details.  Changes were necessary to be enable scanning to
+;    be turned off reliably.
+; 4. Moved test code to tests.asm.
+;
 ; Revision 1.7  2007/07/06 13:55:10  Skip
 ; 1. Modified main loop to wait for Tx to be idle before testing
 ;    B1_FLAG_RESET for potential reset.
@@ -76,6 +85,7 @@
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
         extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags,txstate
+        extern  copy0,tests
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -90,6 +100,12 @@ COMMON  udata
 W_TEMP  res     1
         global  nbtemp
 nbtemp  res     1
+        global  nbloop
+nbloop  res     1
+        global  nbfrom
+nbfrom  res     1
+        global  nbto
+nbto    res     1
 
 ;Bank 0 RAM variables
 DATA0   udata
@@ -169,11 +185,12 @@ TxOff_0         res     1
 Config0 res     1       ;Configuration byte 0
         global  ConfUF
 ConfUF  res     1       ;User function output
-
+        global  Squelch
+Squelch res     1       ;squelch pot level
 ; -------------------------------------------------------------------------
 
-selmode res     1
-
+selmode res     1       ;mode data last read which is not necessarily the 
+                        ;selected mode when scanning.
 
 LastA   res     1
 LastC   res     1
@@ -187,20 +204,31 @@ Flags   res     1
         ;return values from calclowv
 #define FLAG_V0         5       ;Bit 5 = 1 - V0 set
 #define FLAG_V1         6       ;Bit 6 = 1 - V1 set
+#define FLAG_FORCE_M1   7       ;Bit 7 = 1 - return mode 1 data for all modes
 #define FLAG_CLR_FREQ   0x83    ;clear frequency calculation related bits
 
         global  mode
 mode    res     1
+#define MODE_TRIES      d'64'   ;try forcing a mode change mode 4 times
+Mtries  res     1
 
 DATA1   udata
 ;serial clock & data from control system - Bank 1 RAM
-srx5    res     1               ;last byte clocked in (all modes)
-srx4    res     1               ;
-srx3    res     1               ;first byte clocked in (Palomar mode)
-srx2    res     1               ;
-srx1    res     1               ;first byte clocked in (Doug Hall mode)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;NB do not change the order of the following
+        global  srx1,srx2,srx3,srx4,srx5,srx6,srx7
+srx7    res     1               ;last byte clocked in (all modes)
+srx6    res     1               ;
+srx5    res     1               ;first byte clocked in (Palomar mode)
+srx4    res     1               ;
+srx3    res     1               ;first byte clocked in (Doug Hall mode, 5 bytes)
+srx2    res     1               ;
+srx1    res     1               ;first byte clocked in (Doug Hall mode, 7 bytes)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        global  srxbits
 srxbits res     1               ;number of bits clocked in from BCD port
+        global  srxto
 srxto   res     1
         
         global  srxcnt
@@ -210,14 +238,17 @@ srxto   res     1
 ;serial stream
 srxcnt  res     1
 
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;NB do not change the order of the following
 ;Copy of above variables at last sync data timeout for debug
-        global  srx5_d
-srx5_d  res     1               ;last byte clocked in (all modes)
+        global  srx7_d
+srx7_d  res     1               ;last byte clocked in (all modes)
+srx6_d  res     1               ;
+srx5_d  res     1               ;first byte clocked in (Palomar mode)
 srx4_d  res     1               ;
-srx3_d  res     1               ;first byte clocked in (Palomar mode)
+srx3_d  res     1               ;first byte clocked in (Doug Hall mode, 5 bytes)
 srx2_d  res     1               ;
-srx1_d  res     1               ;first byte clocked in (Doug Hall mode)
+srx1_d  res     1               ;first byte clocked in (Doug Hall mode, 7 bytes)
 
 srxbits_d res   1               ;number of bits to clock in from BCD port
         global  srxto_d
@@ -231,6 +262,7 @@ srxgood res     1               ;number of frames that set a RX frequency
 stxgood res     1               ;number of frames that set a TX frequency
         global  srxbad          ;
 srxbad  res     1               ;number of invalid frames
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
         ; Start at the reset vector
 STARTUP code
@@ -260,12 +292,73 @@ isr_cont
         clrf    TRISB           ;turn on Port B output drivers
         bcf     STATUS,RP0      ;bank 0
         bsf     Flags,FLAG_MODEIRQ
+        btfss   Flags,FLAG_FORCE_M1
+        goto    isr3
+
+    ;return mode 1 data no matter what mode the Syntor asks for
+
+        movlw   0x22
+        movwf   selmode
+dloop   decfsz  selmode,f
+        goto    dloop
+
+        movlw   high mode_1
+        movwf   PCLATH          ;
+	nop			;
+
+        movf    PORTC,w         ;w = PORTC with stable address (this should occur 129 cycles after /oe)
+        movwf   LastC
+        
+        movf    PORTA,w         ;
+        movwf   LastA           ;
+        andlw   0xf             ;
+        call    GetCodeData     ;
+
+sloop   movf    PORTA,w         ;
+        andlw   0xf             ;
+        call    GetCodeData     ;
+        btfss   PORTC,2         ;wait for /OE to go inactive
+        goto    sloop           ;
+        
+        movf    PORTA,w         ;w = A0->A5
+        movwf   selmode         ;save
+        
+        bsf     STATUS,RP0      ;bank 1
+        movlw   0xff            ;
+        movwf   TRISB           ;turn off Port B output drivers
+        bcf     STATUS,RP0      ;bank 0
+
+        movlw   0x38            ;Test A6, A7, A8 == 0
+        andwf   LastC,w         ;
+        btfss   STATUS,Z        ;
+        goto    isr1            ;Data read not for mode 1, continue
+
+    ;If the address lower nibble of the address is 0x7 then we're not done
+    
+        movlw   0xf             ;
+        andwf   selmode,w       ;
+        sublw   0x7             ;
+        btfsc   STATUS,Z        ;
+        goto    isr1            ;Data read is not full mode info, continue
+        
+    ;If this was a read of mode 1 then we're done
+    
+        movlw   0x30            ;Test A5, A4 == 0
+        andwf   LastA,w         ;
+        btfss   STATUS,Z        ;
+        goto    isr1            ;Not mode 1
+        bcf     Flags,FLAG_FORCE_M1     ;Whew!
+    ;turn off the output driver for the mode 6 output
+        bsf     STATUS,RP0      ;bank 1
+        bsf     TRISC,0         ;disable output
+        bcf     STATUS,RP0      ;bank 0
+        goto    isr1            ;continue
 
 ;unfortunately this is a critical timing delay loop...
 ;The LSB of the address is valid 25.6 microseconds (128 cycles) after
 ;the following edge of /OE
 
-        movlw   0x22
+isr3    movlw   0x20
         movwf   selmode
 delayloop
         decfsz  selmode,f
@@ -277,8 +370,8 @@ delayloop
         btfsc   PORTC,5         ;
         movlw   high mode_17
         movwf   PCLATH          ;
-        nop                     ;
-
+        nop			;
+        nop			;
         movf    PORTA,w         ;w = A0->A5 (this should occur 129 cycles after /oe)
         btfsc   PORTC,3         ;
         iorlw   0x40            ;
@@ -288,8 +381,7 @@ delayloop
         call    GetCodeData     ;
         movwf   PORTB           ;
 
-synloop
-        movf    PORTA,w         ;w = A0->A5
+synloop movf    PORTA,w         ;w = A0->A5
         btfsc   PORTC,3         ;
         iorlw   0x40            ;
         btfsc   PORTC,4         ;
@@ -299,6 +391,11 @@ synloop
 
         btfss   PORTC,2         ;wait for /OE to go inactive
         goto    synloop         ;
+
+        bsf     STATUS,RP0      ;bank 1
+        movlw   0xff            ;
+        movwf   TRISB           ;turn off Port B output drivers
+        bcf     STATUS,RP0      ;bank 0
 
 isr1    btfss   PIR2,CCP2IF     ;serial clock interrupt ?
         goto    returni         ;nope, exit interrupt handler
@@ -311,6 +408,8 @@ isr1    btfss   PIR2,CCP2IF     ;serial clock interrupt ?
         movf    srxcnt,f        ;any bits left to receive?
         btfsc   STATUS,Z        ;
         goto    isr2            ;nope
+        rrf     srx7,f          ;
+        rrf     srx6,f          ;
         rrf     srx5,f          ;
         rrf     srx4,f          ;
         rrf     srx3,f          ;
@@ -323,11 +422,7 @@ isr2
         bcf     STATUS,RP0      ;bank 0
         bcf     PIR2,CCP2IF     ;
 
-returni bsf     STATUS,RP0      ;bank 1
-        movlw   0xff            ;
-        movwf   TRISB           ;turn off Port B output drivers
-        bcf     STATUS,RP0      ;bank 0
-        bcf     PIR1,CCP1IF     ;
+returni bcf     PIR1,CCP1IF     ;
 
         MOVF    PCLATH_TEMP, W  ;Restore PCLATH
         MOVWF   PCLATH          ;Move W into PCLATH
@@ -412,7 +507,6 @@ vfoe    movf    code_e,w
 vfof    movf    code_f,w
         movwf   PORTB
         return
-
 PROG2   code
 
 startup1
@@ -467,7 +561,7 @@ clr3    clrf    INDF            ;
         movwf   TRISA           ;
 
 ;Init port C
-        movlw   0xBE            ;C0 and C6 are outputs
+        movlw   0xBF            ;C6 is an output (C0 configured dynamically)
         movwf   TRISC           ;
         
         bcf     STATUS,RP0      ;bank 0
@@ -484,21 +578,17 @@ clr3    clrf    INDF            ;
         clrf    EEADRH          ;
         movlw   low code_0      ;point to start of data
         call    readee1         ;
-        ifdef   TEST_PALOMAR
-        movlw   0x23            ;
-        movwf   Config0         ;
-        endif      
-        call    serialinit      ;initialize serial port
         
 ;Init port D
         movf    ConfUF,w        ;1 = user output bit
-        iorlw   0x26            ;bits 1, 2 and 5 are always outputs
+        iorlw   0x7e            ;bits 1 -> 6 are always outputs
         xorlw   0xff            ;invert for tristate control
         bsf     STATUS,RP0      ;bank 1
         movwf   TRISD           ;
         bcf     STATUS,RP0      ;bank 0
         
-
+        call    serialinit      ;initialize serial port
+        
 ;initialize timer 2 for a real time clock
 ;20 Mhz / 4 / 1 / 65536 = 76.29 hz or 13.11 milliseconds
         MOVLW   B'00000001'     ; 1:1 prescale, no osc, no sync, internal clock,
@@ -535,79 +625,11 @@ clr3    clrf    INDF            ;
         movwf   code_9          ;
         movwf   code_a          ;
         
-        ifdef  VHF_RANGE_1
-        ;VHF range 1 radio, tx vco split
-        ;144000000 = 8954400
-        movlw   0x00            ;
-        movwf   BARGB3
-        movlw   0x44            ;
-        movwf   BARGB2
-        movlw   0x95            ;
-        movwf   BARGB1
-        movlw   0x8             ;
-        movwf   BARGB0
-        
-        movlw   high write32ee  ;
-        movwf   PCLATH
-        movlw   TX_VCO_SPLIT_F  ;
-        call    write32ee
-        
-        ;VHF range 1 radio, rx vco split
-        ;198500000 = BD4DEA0
-        movlw   0xa0            ;
-        movwf   BARGB3
-        movlw   0xde            ;
-        movwf   BARGB2
-        movlw   0xd4            ;
-        movwf   BARGB1
-        movlw   0xb             ;
-        movwf   BARGB0
-        movlw   RX_VCO_SPLIT_F  ;
-        call    write32ee
-        endif
-        
-        ifdef  VHF_RANGE_2
-        ;VHF range 2 radio, tx vco split
-        ;161800000 = 9A4DF40
-        movlw   0x40            ;
-        movwf   BARGB3
-        movlw   0xdf            ;
-        movwf   BARGB2
-        movlw   0xa4            ;
-        movwf   BARGB1
-        movlw   0x9             ;
-        movwf   BARGB0
-        
-        movlw   high write32ee  ;
-        movwf   PCLATH
-        movlw   TX_VCO_SPLIT_F  ;
-        call    write32ee
-        
-        ;VHF range 2 radio, rx vco split
-        ;161600000 = 9A1D200
-;        movlw   0x00            ;
-;        movwf   BARGB3
-;        movlw   0xd2            ;
-;        movwf   BARGB2
-;        movlw   0xa1            ;
-;        movwf   BARGB1
-;        movlw   0x9             ;
-;        movwf   BARGB0
-
-        ;150000000 = 8F0D180
-        movlw   0x80            ;
-        movwf   BARGB3
-        movlw   0xd1            ;
-        movwf   BARGB2
-        movlw   0xf0            ;
-        movwf   BARGB1
-        movlw   0x8             ;
-        movwf   BARGB0
-
-        movlw   RX_VCO_SPLIT_F  ;
-        call    write32ee
-        endif
-        
+ifdef   SIMULATE
+        movlw   high tests      
+        movwf   PCLATH          ;
+        call    tests           ;        
+endif        
         return
 
         ;read 32 bit int from FLASH into BARGB3 .. BARGB0
@@ -663,62 +685,8 @@ startup
         movlw   high startup1   ;
         movwf   PCLATH
         call    startup1        ;
-        
-        ifdef   TEST_GENERIC
-        movlw   0x13            ;
-        movwf   Config0         ;
-        movlw   0x00            ;load 144.52
-        movwf   AARGB0          ;srx1
-        movlw   0xc2            ;
-        movwf   AARGB1          ;srx2
-        movlw   0xa6            ;146
-        movwf   AARGB2          ;srx3
-        movlw   0x52            ;.52
-        movwf   AARGB3          ;srx4
-        movlw   0xff            ;
-        movwf   BARGB0          ;srx5
-        movlw   d'40'           ;
-        movwf   BARGB1          ;
-        bsf     STATUS,RP0      ;bank 1
-        clrf    srxto           ;clear timeout counter
-        bcf     STATUS,RP0      ;bank 0
-        call    cnv_ctrlsys     ;
-        endif
-
-        ifdef   TEST_GENERIC
-        bsf     STATUS,RP0      ;bank 1
-        movlw   0xff            ;load 449.220 -
-        movwf   srx1            ;
-        movlw   0xd4            ;
-        movwf   srx2            ;
-        movlw   0x89            ;
-        movwf   srx3            ;
-        movlw   0x22            ;
-        movwf   srx4            ;
-        movlw   0x54            ;
-        movwf   srx5            ;
-        movlw   d'40'           ;
-        movwf   srxbits         ;
-        clrf    srxto           ;clear timeout counter
-        bcf     STATUS,RP0      ;bank 0
-        endif
-        
-        ifdef   TEST_PALOMAR
-        movlw   0xee            ;load 146.76, 123.0
-        movwf   AARGB2          ;
-        movlw   0x9f            ;
-        movwf   AARGB3          ;
-        movlw   0x98            ;
-        movwf   BARGB0          ;
-        movlw   d'48'           ;
-        movwf   BARGB1          ;
-        bsf     STATUS,RP0      ;bank 1
-        clrf    srxto           ;clear timeout counter
-        clrf    srxcnt          ;
-        bsf     b1flags,B1_FLAG_NEW_DATA        ;
-        bcf     STATUS,RP0      ;bank 0
-        call    cnv_ctrlsys     ;
-        endif
+        movlw   high mainloop   ;
+        movwf   PCLATH
 
 mainloop
         clrwdt                  ;kick the dog
@@ -768,8 +736,34 @@ main2   bcf     STATUS,RP0      ;bank 0
         ;the timer has ticked
         bcf     PIR1,TMR1IF     ;
 
-        ;check for serial receive data timeout
+    ;Kludge: toggle the mode 6 line once every 200 milliseconds 
+    ;until the Syntor reads mode 1 !
+    
+        btfss   Flags,FLAG_FORCE_M1
+        goto    main6           ;
+        decfsz  Mtries,f        ;
+        goto    main7           ;
+
+    ;Hmmm... maybe the control head isn't on mode 1... give up
+        bcf     Flags,FLAG_FORCE_M1
+        
+        ifdef   DEBUG_MODE_SEL        
         bsf     STATUS,RP0      ;bank 1
+        incf    stxgood,w       ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    stxgood,f       ;
+        bcf     STATUS,RP0      ;bank 0
+        endif
+        
+        goto    main6           ;
+
+main7   movlw   0xf             ;16 ticks since the last change ?
+        andwf   Mtries,w        ;
+        btfsc   STATUS,Z        ;
+        call    changem         ;
+        
+        ;check for serial receive data timeout
+main6   bsf     STATUS,RP0      ;bank 1
         movf    srxbits,w       ;
         btfsc   STATUS,Z        ;
         goto    main1           ;no bits received
@@ -803,42 +797,21 @@ main2   bcf     STATUS,RP0      ;bank 0
         subwf   srx5_d,w        ;
         btfss   STATUS,Z        ;
 newdata bsf     b1flags,B1_FLAG_NEW_DATA        ;
-        
-        ;copy srx1...srx5 into Bank0 for the conversion routines
-        movf    srx1,w          ;
-        movwf   srx1_d
-        bcf     STATUS,RP0      ;bank 0
-        movwf   AARGB0          ;
 
-        bsf     STATUS,RP0      ;bank 1
-        movf    srx2,w          ;
-        movwf   srx2_d
-        bcf     STATUS,RP0      ;bank 0
-        movwf   AARGB1          ;
-
-        bsf     STATUS,RP0      ;bank 1
-        movf    srx3,w          ;
-        movwf   srx3_d
-        bcf     STATUS,RP0      ;bank 0
-        movwf   AARGB2          ;
-
-        bsf     STATUS,RP0      ;bank 1
-        movf    srx4,w          ;
-        movwf   srx4_d
-        bcf     STATUS,RP0      ;bank 0
-        movwf   AARGB3          ;
-
-        bsf     STATUS,RP0      ;bank 1
-        movf    srx5,w          ;
-        movwf   srx5_d
-        bcf     STATUS,RP0      ;bank 0
-        movwf   BARGB0          ;
-
-        bsf     STATUS,RP0      ;bank 1
+        ;save number of bits received for control system code
         movf    srxbits,w       ;
-        movwf   srxbits_d       ;
         bcf     STATUS,RP0      ;bank 0
-        movwf   BARGB1          ;
+        movwf   Srxbits         ;
+        
+        ;copy srx1...srx7, srxbits into srx1_d ... srx7_d,srxbits_d for debug
+
+        movlw   8               ;
+        movwf   nbloop          ;        
+        movlw   low srx7        ;
+        movwf   nbfrom          ;
+        movlw   low srx7_d      ;
+        movwf   nbto            ;
+        call    copy0           ;
 
         bsf     STATUS,RP0      ;bank 1
         bsf     PIE2,CCP2IE     ;re-enable clock interrupts
@@ -932,10 +905,6 @@ SaveMode
         btfsc   LastC,5         ;
         iorlw   0x10
         movwf   mode            ;
-        ;turn off the output driver for the mode 6 output
-        bsf     STATUS,RP0      ;bank 1
-        bsf     TRISC,0         ;disable output
-        bcf     STATUS,RP0      ;bank 0
         return
 
 CLookup
@@ -1549,9 +1518,66 @@ setrx2  iorwf   code_b,f
         iorlw   0x1             ;clear zero flag
         return
 
-;toggle the mode output line to force the Syntor to re-read the code plug
+;Take 1: I orginally drove the mode 6 select line by toggling it every time 
+;the VFO frequency changed to toggle between the two banks of 32 modes. 
+;I later discovered that approach didn't work with the 8 channel clam shell 
+;style heads that have a 8 pole switch rather than a BCD switch, since that 
+;caused the Syntor to alternately read mode 6 and whatever mode
+;was actually selected.
+;
+;Take 2: Read the state of the mode 6 line, turn on the tristate driver and 
+;then drive it in the opposite direction.  Once the Syntor read the code plug, 
+;the tristate driver was turned off allowing the restoring the previous mode.  
+;This caused problems setting the mode when scanning was enabled since *ANY* 
+;code plug read by the syntor returned the mode 6 line to its previous state.  
+;If the next read happened to be because of scanning rather than because the 
+;Syntor firmware had noticed that the mode had changed then the new mode 1 
+;info wasn't refreshed.
+;
+;Take 3:
+;Set a force refresh flag and then drive the mode 6 select line to the 
+;opposite sense.  If we have a BCD control head this will cause mode 33 
+;to be read which looks like mode 1 to us.  If we have single pole control 
+;head this will cause the Syntor to read mode 6 information, but the ISR 
+;returns mode 1 information no matter what when the force refresh flag is set.
+;When the ISR has detected that a full read of mode 1 data has occurred
+;(not a truncated mode read for scanning data) it will clear the refresh
+;flag and turn off the tristate driver.  This will cause the Syntor to
+;reread the current mode data in the normal manner.
+;
+;NB: Yes this causes a glitch when mode 1 is not the selected mode and
+;the VFO setting is changed, but that's life.
+;
+;We toggle the sense of the mode 6 line every 200 milliseconds until the
+;Syntor reads mode 1...  why ?  A couple of reasons:
+;
+;1. Normally the Syntor reads the code plug right away, but for some reason 
+;it's hard to get it's attention when scanning is enabled and it's stopped 
+;on an active channel...
+;
+;2. The mode bus is bidirectional when used with some control groups.  This
+;means that when we read the sense of the mode 6 line and then drive it in
+;the "opposite" direction we may read the line while it's an output rather
+;than an input causing us to drive it in the same direction... sigh.
+;
+
+;Force the Syntor to re-read the code plug
+
         global  changemode
 changemode
+        movlw   MODE_TRIES      ;
+        movwf   Mtries          ;set retry counter
+        bsf     Flags,FLAG_FORCE_M1     ;
+        
+changem 
+        ifdef   DEBUG_MODE_SEL        
+        bsf     STATUS,RP0      ;bank 1
+        incf    srxgood,w       ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    srxgood,f       ;
+        bcf     STATUS,RP0      ;bank 0
+        endif
+        
         btfss   PORTC,0         ;
         goto    setmodehigh     ;
         bsf     STATUS,RP0      ;bank 1
@@ -1765,8 +1791,7 @@ write32ee
 ;
         global  prgmode
 prgmode call    setmodeadr
-        call    prg_loop        ;
-        goto    changemode      ;force Syntor to reload current channel & return
+        goto    prg_loop        ;
 
 ;program LoopCnt bytes of ram from bank 0 into flash or EEPROM starting
 ;at the EEADR previously set
