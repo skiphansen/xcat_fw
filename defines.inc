@@ -1,5 +1,11 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.5  2007/07/18 18:41:01  Skip
+; 1. Added the current Squelch pot level to config info sent/received and
+;    stored in EEPROM.
+; 2. Added CONFIG_POT_* defines for squelch pot UF bits.
+; 3. Added Srx1...Srx7 and Srxbits alias defines.
+;
 ; Revision 1.4  2005/01/05 05:01:31  Skip Hansen
 ; Added COM_FLAG_BAD_DATA, B1_FLAG_RESET, B1_FLAG_NEW_DATA
 ;
@@ -18,7 +24,9 @@
 ;#define VHF_RANGE_1
 ;#define VHF_RANGE_2
 ;#define TEST_GENERIC
+;#define TEST_GENERIC7
 ;#define TEST_PALOMAR
+;#define DEBUG_MODE_SEL
 
 ;EEPROM layout
 
@@ -35,9 +43,9 @@
 ;Adr 40 -> 43 Transmit offset 
 #define TX_OFFSET_ADR   d'40'
 
-;Adr 44 -> 45 Configuration bytes
+;Adr 44 -> 46 Configuration bytes
 #define CONFIG_EEPROM_ADR       d'44'
-#define CONFIG_BYTES            2
+#define CONFIG_BYTES            3
 
 ;Configuration byte 0 read from EEPROM on powerup
 
@@ -67,17 +75,35 @@
 ;0xC0 - remote base 4 (bytes 10->12 in the serial stream)
 #define CONFIG_REMOTE_MASK      0xc0
 
+;Config0, B6 - User Function used for 8 bit squelch level in Generic mode
+#define CONFIG_UF_AS_SQUELCH    0x80
 
-;ConfUF - User defined output port bit usages
-#define CONFIG_COS_IN   0       ;b0: 0 - UF1 COS input
-                                ;    1 - UF1 user output
-#define CONFIG_QRP      1       ;b1: 0 - UF2 QRP power output
+;Configuration byte 1: ConfUF - User defined output port bit usages
+#define CONFIG_COS_IN   0       ;b0: 0 - UF0 COS input
+                                ;    1 - UF0 user output
+#define CONFIG_QRP      1       ;b1: 0 - UF1 QRP power output
+                                ;    1 - UF1 output
+#define CONFIG_HI_PWR   2       ;b2: 0 - UF2 High power output
                                 ;    1 - UF2 output
-#define CONFIG_HI_PWR   2       ;b2: 0 - UF3 High power output
-                                ;    1 - UF3 output
 
-#define CONFIG_2_5_SEL  5       ;b5: 0 - UF6 active adds 2.5 Khz to frequency
-                                ;    1 - UF6 user output
+;Bits b6, b5 and b3 can optionally be used to control a 
+; Microchip mcp41010 digital pot for squelch
+
+#define CONFIG_POT_CS   3       ;b3: 0 - UF3 Digital pots CS
+                                ;    1 - UF3 output
+                                
+#define CONFIG_POT_SCLK 4       ;b4: 0 - UF4 Digital pots SCLK
+                                ;    1 - UF4 output
+
+#define CONFIG_2_5_SEL  5       ;b5: 0 - UF5 active adds 2.5 Khz to frequency
+                                ;    1 - UF5 user output
+
+#define CONFIG_POT_SI   6       ;b6: 0 - UF6 Digital pots SI
+                                ;    1 - UF6 output
+                                
+#define CONFIG_SQU_POT_MASK     0x58                                
+
+;Configuration byte 2: SquelchLevel
 
 ;icomflags bit definitions
 #define COM_FLAG_LSB1ST 0
@@ -92,3 +118,17 @@
 
 #define SERAL_DAT       PORTE,0
 #define COS_DAT         PORTD,0
+
+;bank 0 aliases for serial rx data.  Used by control system code to
+;process serial data without excessive bank switching.
+;NB don't change the order! Srx7 ... Srx1 must be in consecutive memory
+;locations.
+#define Srx7            REMB3
+#define Srx6            REMB2
+#define Srx5            REMB1
+#define Srx4            REMB0
+#define Srx3            AARGB3
+#define Srx2            AARGB2
+#define Srx1            AARGB1
+#define Srxbits         AARGB0
+
