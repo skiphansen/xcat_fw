@@ -1,4 +1,10 @@
 ;$Log: icom.asm,v $
+;Revision 1.8  2007/07/18 18:38:43  Skip
+;1. Added digital squelch port support.
+;2. Added support for 7 byte Doug Hall/Generic protocol.
+;3. Commented out Palomar support (code space issues).
+;4. srx -> Srx and moved defines to defines.inc.
+;
 ;Revision 1.7  2007/07/06 14:16:38  Skip
 ;Version 0.26: Modifications to prevent mode change message from being lost
 ;during scans (?  It's been 5 months, changes made on 2/3/2007).
@@ -118,6 +124,7 @@ txdatacount     res     1       ;amount of page data to sent
 txdpointer      res     1       ;pointer to data
                 global b1flags
 b1flags         res     1       ;
+
 PROG2           code
 
 ;CI-V protocol:
@@ -152,8 +159,11 @@ PROG2           code
         extern  readee
 
         extern  mode,Config0,ConfUF,code_0,code_8,code_9,code_a,srxcnt
-        extern  srx5_d,srxto_d,srxgood,stxgood
+        extern  srx1,srx2,srx3,srx4,srx5,srx6,srx7
+        extern  srx7_d,srxto_d,srxgood,stxgood
         extern  GetBaudRate,GetCIVAdr,srxcnt_d
+        extern  Squelch
+        extern  nbloop,nbfrom,nbto
 
 #define LoopCntr        DivA
 #define temp_0          fvco_0
@@ -165,14 +175,6 @@ PROG2           code
 #define temp1_1         N1_1
 #define temp1_2         N1_2
 #define temp1_3         N1_3
-
-#define srx1            AARGB0
-#define srx2            AARGB1
-#define srx3            AARGB2
-#define srx4            AARGB3
-#define srx5            BARGB0
-#define srxbits         BARGB1
-
 
 ;init uart for 8 data bits, no parity
         global  serialinit
@@ -190,7 +192,27 @@ serialinit
         clrf    txcount         ;default tx count to max
         clrf    NextTxState     ;Set next state to idle just for safety
         
+        movlw   high serialinit2;
+        movwf   PCLATH          ;
+        BCF     STATUS,RP0      ;Bank 0
+        movlw   CONFIG_SQU_POT_MASK
+        andwf   ConfUF,w        ;
+        btfss   STATUS,Z        ;
+        goto    serialinit2     ;
+        
+        ;squelch pot is attached
+        bsf     PORTD,CONFIG_POT_CS     ;cs high
+        bsf     PORTD,CONFIG_POT_SCLK   ;set clock high
+        movlw   high SetSquelchPot;
+        movwf   PCLATH          ;
+        movf    Squelch,w
+        call    SetSquelchPot   ;init pot level
+        
         ;initialize UART
+serialinit2
+        BSF     STATUS,RP0      ;Bank 1
+        movlw   high GetBaudRate;
+        movwf   PCLATH          ;
         call    GetBaudRate     ;
         movwf   Data_0          ;save it
         movlw   high serialinit1;
@@ -546,6 +568,7 @@ trycmd9 movlw   0x9             ;Command 9 ?
 ;
         BCF     STATUS,RP0      ;Bank 0
         call    prgmode         ;
+        call    changemode      ;force Syntor to reload current channel
         goto    SendOk          ;
 
 trycmda movlw   0xa             ;Command a ?
@@ -682,12 +705,14 @@ trycmdaa
 ; 0x89 - get sync data debug response
 ; 0x0a - Set communications parameters
 ; 0x8a - Set communications parameters ACK
+; 0x0b - Set squelch level
+; 0x8a - Set squelch level ACK
 ;
 ;  Cmd     Data_0         Data_1 ... Data_16
 ; <0xaa>   [0x01 | 0x80 ]  <16 bytes of raw data in code plug format>
 ;
 ;
-        movlw   d'11'           ;> max sub command ?
+        movlw   0xc             ;> max sub command ?
         subwf   Data_0,w        ;
         btfsc   STATUS,C        ;
         goto    SendNG          ;
@@ -706,6 +731,7 @@ aasub   addwf   PCL,f
         goto    SetVcoSplitF    ;0x8 - set VCO split frequencies
         goto    GetSyncDebug    ;0x9 - get sync data debug info
         goto    SetCommParam    ;0xa - Set communications parameters
+        goto    SetSquelchLvl   ;0xb - Set squelch level
 
 ;subcommand 0: get raw VFO data
 getcpdat
@@ -721,11 +747,11 @@ getcpdat
 ;subcommand 1: set raw VFO data
 setcpdat
         movlw   d'16'           ;copy 16 bytes
-        movwf   txcount         ;
+        movwf   nbloop          ;
         movlw   low code_0      ;to code_0 ...
-        movwf   DataP           ;
+        movwf   nbto            ;
         movlw   low Data_1      ;from Data_1 ...
-        movwf   Data_0          ;
+        movwf   nbfrom          ;
         call    copy1_0         ;
 changeok        
         BCF     STATUS,RP0      ;Bank 0
@@ -746,7 +772,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'2'            ;
         movwf   Data_5          ;
-        movlw   a'6'            ;
+        movlw   a'7'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -767,11 +793,11 @@ getconfig
 setconfig
         bsf     b1flags,B1_FLAG_RESET   ;reset after sending Ok
         movlw   CONFIG_BYTES    ;copy CONFIG_BYTES bytes
-        movwf   txcount         ;
+        movwf   nbloop          ;
         movlw   low Data_1      ;from Data_1 ...
-        movwf   Data_0          ;
+        movwf   nbfrom          ;
         movlw   low Config0     ;to Config0 ...
-        movwf   DataP           ;
+        movwf   nbto            ;
         call    copy1_0         ;
         movlw   low Config0     ;point to data
         movwf   FSR             ;
@@ -813,16 +839,16 @@ GetTxOffset
 ;subcommand 6 - set Tx offset
 SetTxOffset
         movlw   4               ;copy 4 bytes
-        movwf   txcount         ;
+        movwf   nbloop          ;
         movlw   low Data_1      ;from Data_1 ...
-        movwf   Data_0          ;
+        movwf   nbfrom          ;
         movlw   low TxOff_3     ;to TxOff_3 ...
-        movwf   DataP           ;
+        movwf   nbto            ;
         call    copy1_0         ;
         movlw   low TxOff_3     ;point to data
         movwf   FSR             ;
         BCF     STATUS,RP0      ;Bank 0
-        movlw   4               ;copy CONFIG_BYTES bytes
+        movlw   4               ;copy 4 bytes
         movwf   LoopCnt         ;
         movlw   TX_OFFSET_ADR   ;
         goto    Write0ToEEPROM  ;
@@ -857,11 +883,11 @@ GetVcoSplitF
 ;subcommand 8 - set VCO split frequencies
 SetVcoSplitF    
         movlw   8               ;copy 8 bytes
-        movwf   txcount         ;
+        movwf   nbloop          ;
         movlw   low Data_1      ;from Data_1 ...
-        movwf   Data_0          ;
+        movwf   nbfrom          ;
         movlw   low fvco_0      ;to fvco_0 ...
-        movwf   DataP           ;
+        movwf   nbto            ;
         call    copy1_0         ;
         movlw   low fvco_0      ;point to data
         movwf   FSR             ;
@@ -875,9 +901,9 @@ SetVcoSplitF
 GetSyncDebug
         movlw   5               ;continue @ txstate 5
         movwf   NextTxState     ;
-        movlw   low srx5_d      ;
+        movlw   low srx7_d      ;
         movwf   txdpointer      ;
-        movlw   d'11'           ;11 bytes to send
+        movlw   d'13'           ;13 bytes to send
         movwf   txdatacount     ;
         movlw   0x89            ;
         goto    sendxcatresp    ;kick it off
@@ -886,11 +912,11 @@ GetSyncDebug
 SetCommParam    
         bsf     b1flags,B1_FLAG_RESET   ;reset after sending response
         movlw   2               ;copy 2 bytes
-        movwf   txcount         ;
+        movwf   nbloop          ;
         movlw   low Data_1      ;from Data_1 ...
-        movwf   Data_0          ;
+        movwf   nbfrom          ;
         movlw   low temp_0      ;to temp_0 ...
-        movwf   DataP           ;
+        movwf   nbto            ;
         call    copy1_0         ;
         movlw   low temp_0      ;point to data
         movwf   FSR             ;
@@ -912,19 +938,30 @@ SetCommParam
         movwf   PCLATH          ;
         call    prg_loop        ;
         BSF     STATUS,RP0      ;Bank 1
+        movlw   high sendxcatack;
+        movwf   PCLATH          ;
+        movlw   0x8a            ;
+        goto    sendxcatack     ;kick it off
+        
+;subcommand 0xb - Set squelch level
+SetSquelchLvl
+        movf    Data_1,w        ;get level
+        BCF     STATUS,RP0      ;Bank 0
+        call    SetSquelchPot   ;set pot level
+        BSF     STATUS,RP0      ;Bank 1
+        movlw   0x8b            ;
+;       goto    sendxcatack     ;kick it off
+
+sendxcatack
+        movwf   Data_0          ;update subcommand for the response
         movlw   0xfd            ;
         movwf   Data_1          ;EOF
-        movlw   0x8a            ;
-        movwf   Data_0          ;update subcommand for the response
-        movlw   5               ;send header
-        movlw   high prg_loop   ;
-        movwf   PCLATH          ;
         goto    sendresp1       ;
-                
+        
 sendxcatresp
         movwf   Data_0          ;update subcommand for the response
         movlw   5               ;send header
-sendresp1
+sendresp1        
         movwf   txcount         ;
         movf    From_Adr,w      ;copy from adr into
         movwf   To_Adr          ;to adr
@@ -1122,54 +1159,70 @@ changebad
         clrw                    ;set zero flag
         return                  ;
 
-;copy txcount bytes from Bank 1 RAM address in Data_0 to
-;Bank 0 RAM address in DataP.  Enter/exit with RAM Bank 1 selected.
-        global  copy1_0
-copy1_0 movf    Data_0,w        ;get from address
-        incf    Data_0,f        ;
+;copy nbloop bytes from Bank 0 RAM address in nbfrom to
+;Bank 0 RAM address in nbto.  Enter/exit with RAM Bank 1 selected.
+        global  copy0
+copy0   movf    nbfrom,w        ;get from address
+        incf    nbfrom,f        ;
         movwf   FSR             ;
         movf    INDF,w          ;get byte from rx buffer
         movwf   nbtemp          ;save it
-        movf    DataP,w         ;get to address
-        incf    DataP,f         ;
+        movf    nbto,w          ;get to address
+        incf    nbto,f          ;
+        movwf   FSR             ;
+        movf    nbtemp,w        ;get byte to copy
+        movwf   INDF            ;save it
+        decfsz  nbloop,f        ;
+        goto    copy0           ;
+        return
+
+;copy nbloop bytes from Bank 1 RAM address in nbfrom to
+;Bank 0 RAM address in nbto.  Enter/exit with RAM Bank 1 selected.
+        global  copy1_0
+copy1_0 movf    nbfrom,w        ;get from address
+        incf    nbfrom,f        ;
+        movwf   FSR             ;
+        movf    INDF,w          ;get byte from rx buffer
+        movwf   nbtemp          ;save it
+        movf    nbto,w          ;get to address
+        incf    nbto,f          ;
         movwf   FSR             ;
         bcf     STATUS,RP0      ;bank 0
         movf    nbtemp,w        ;get byte to copy
         movwf   INDF            ;save it
         BSF     STATUS,RP0      ;Bank 1
-        decfsz  txcount,f       ;
+        decfsz  nbloop,f        ;
         goto    copy1_0         ;
         return
-        
 
-;copy txcount bytes from Bank 0 RAM address in Data_0 to
-;Bank 1 RAM address in DataP.  Enter/exit with RAM Bank 1 selected.
-;copy0_1 movf    Data_0,w        ;get from address
-;        incf    Data_0,f        ;
-;        movwf   FSR             ;
-;        bcf     STATUS,RP0      ;bank 0
-;        movf    INDF,w          ;get byte from rx buffer
-;        movwf   nbtemp          ;save it
-;        BSF     STATUS,RP0      ;Bank 1
-;        movf    DataP,w         ;get to address
-;        incf    DataP,f         ;
-;        movwf   FSR             ;
-;        movf    nbtemp,w        ;get byte to copy
-;        movwf   INDF            ;save it
-;        decfsz  txcount,f       ;
-;        goto    copy0_1         ;
-;        return
-        
+;copy nbloop bytes from Bank 0 RAM address in nbfrom to
+;Bank 1 RAM address in nbto.  Enter/exit with RAM Bank 0 selected.
+        global  copy0_1
+copy0_1 movf    nbfrom,w        ;get from address
+        incf    nbfrom,f        ;
+        movwf   FSR             ;
+        movf    INDF,w          ;get byte from rx buffer
+        movwf   nbtemp          ;save it
+        movf    nbto,w          ;get to address
+        incf    nbto,f          ;
+        movwf   FSR             ;
+        bsf     STATUS,RP0      ;bank 1
+        movf    nbtemp,w        ;get byte to copy
+        movwf   INDF            ;save it
+        BCF     STATUS,RP0      ;Bank 0
+        decfsz  nbloop,f        ;
+        goto    copy0_1         ;
+        return
 
 ;------------------------------------------------------------------------------
 ;"Link Comm RLC3" / "Generic" / "Doug Hall" format:
 ;
 ; Byte lsb bit of byte 1 shifted in first
 ;  Byte 1: 8 user functions, high = off, low = on
-; (srx1, first byte clocked in)
+; (Srx1, first byte clocked in)
 ;
 ;  Byte 2: B7 - TX power, 1 = on
-; (srx2)   B6 - RX power, 1 = on
+;          B6 - RX power, 1 = on
 ;          B5, B4 - Tx power:
 ;                 B5 0, B4 0 = low
 ;                 B5 1, B4 0 = medium
@@ -1196,7 +1249,7 @@ copy1_0 movf    Data_0,w        ;get from address
 ;               duplex operations.
 ;
 ;  Byte 3: B7 - Radio power, 1 = on
-; (srx3)   B6 - 5 Khz bit, 1 = +5 Khz
+;          B6 - 5 Khz bit, 1 = +5 Khz
 ;          B5 -> B4 Offset:
 ;               B5 0, B4 0 = negative Tx offset
 ;               B5 0, B4 1 = positive Tx offset
@@ -1205,13 +1258,12 @@ copy1_0 movf    Data_0,w        ;get from address
 ;          B0 -> B3 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
 ;
 ;  Byte 4: B4 -> B7 100 Khz digit
-; (srx4)   B0 -> B3 10 Khz digit
+;          B0 -> B3 10 Khz digit
 ;
 ;  Byte 5: B7 - 1 = PL decode enable
-; (srx5)   B6 - 1 = PL encode enable
+;          B6 - 1 = PL encode enable
 ;          B0 -> B5 = PL tone (Communications Specialists TS64 number - 1)
 ;
-; (Byte 6 and 7 are currently ignored by the Xcat)
 ;  Byte 6: B4 -> B7 Rx level
 ;          B0 -> B3 Squelch level
 ;
@@ -1220,7 +1272,8 @@ copy1_0 movf    Data_0,w        ;get from address
 ;          B2 - Memory save
 ;          B1 - Open squelch
 ;          B0 - Scan on
-;
+;     Memory channels 1->32.  Memory channel 0 = no memory operation.
+;       
 ;Communications Specialists TS64 numbers:
 ;1 = 67.0Hz 2 = 71.9Hz 3 = 74.4Hz 4 = 77.0Hz 5 = 79.7Hz
 ;6 = 82.5Hz 7 = 85.4Hz 8 = 88.5Hz 9 = 91.5Hz 10 = 94.8Hz
@@ -1236,23 +1289,117 @@ copy1_0 movf    Data_0,w        ;get from address
         global  cnv_generic
 cnv_generic
         movlw   d'8'            ;1 bytes ?
-        subwf   BARGB1,w        ;
+        subwf   Srxbits,w       ;
+        btfss   STATUS,Z        ;
+        goto    gen8            ;nope
+        ;copy UF byte and continue
+        bsf     STATUS,RP0      ;bank 1
+        movf    srx7,w          ;
+        bcf     STATUS,RP0      ;bank 0
+        movwf   Srx1            ;save
+        goto    setuf           ;
+        
+gen8    movlw   d'40'           ;5 bytes ?
+        subwf   Srxbits,w       ;
+        btfss   STATUS,Z        ;
+        goto    gen7            ;nope
+    
+    ;5 byte Generic command string, copy bytes into position
+        movlw   low srx7        ;
+        movwf   nbfrom          ;
+        goto    cnv_generic1    ;continue
+        
+gen7    movlw   d'56'           ;7 bytes ?
+        subwf   Srxbits,w       ;
         btfsc   STATUS,Z        ;
-        goto    uf_only         ;yup
-        movlw   d'40'           ;5 bytes ?
-        subwf   BARGB1,w        ;
-        btfsc   STATUS,Z        ;
-        goto    cnv_generic1    ;yup
-        movlw   d'56'           ;7 bytes ?
-        subwf   BARGB1,w        ;
-        btfsc   STATUS,Z        ;
-        goto    cnv_generic1    ;yup
+        goto    gen12           ;yup
         bsf     icomflags,COM_FLAG_BAD_DATA
         return                  ;nope
+
+    ;7 byte generic command, process bytes 6 & 7
+gen12   movlw   CONFIG_UF_AS_SQUELCH
+        andwf   Config0,w       ;
+        btfss   STATUS,Z        ;
+        goto    gen9            ;squelch is controlled by UF bits
+    ;set squelch from byte 6
+        bsf     STATUS,RP0      ;bank 1
+        movf    srx6,w          ;
+        bcf     STATUS,RP0      ;bank 0
+        andlw   0xf             ;get squelch bits
+        movwf   temp_0          ;
+        movwf   temp_1          ;
+        swapf   temp_0,w        ;copy into upper 4 bits
+        iorwf   temp_1,w        ;
+        call    SetSquelchPot   ;
+    ;process byte 7
+gen9    bsf     STATUS,RP0      ;bank 1
+        movf    srx7,w          ;
+        bcf     STATUS,RP0      ;bank 0
+        movwf   temp_0          ;
+        btfsc   temp_0,0        ;test Scan On bit
+        goto    gen10           ;
         
+        ;scan is off
+        movlw   0x80            ;
+        movwf   code_9          ;
+        movwf   code_a          ;
+        goto    gen11           ;      
+
+    ;scan is on, read bytes 9 and 10 from the mode 1 settings in EEPROM
+        
+gen10   movlw   MODE1_ADR+9
+        BCF     STATUS,RP0      ;Bank 0
+        BSF     STATUS,RP1      ;Bank 2
+        movwf   EEADR           ;
+        clrf    EEADRH          ;
+        BCF     STATUS,RP1      ;Bank 0
+        movlw   2               ;number of bytes to read
+        movwf   LoopCnt         ;
+        movlw   high readee     ;
+        movwf   PCLATH
+        movlw   low code_9      ;
+        call    readee          ;
+        movlw   high gen11      ;
+        movwf   PCLATH          ;
+        
+gen11   movlw   0xff            ;
+        btfsc   temp_0,1        ;test open squelch bit
+        call    SetSquelchPot   ;
+    ;Check for memory operation
+        movlw   0xf8            ;
+        andwf   temp_0,w        ;
+        btfsc   STATUS,Z        ;
+        goto    gen13           ;memory = 0, no memory operation
+        
+        swapf   temp_0,w        ;
+        andlw   0xf             ;
+        btfsc   temp_0,3        ;
+        iorlw   0x10            ;add in channel 16 bit
+        movwf   memchan         ;
+        decf    memchan,f       ;adjust mode 1 = memchan 0
+        
+        btfss   temp_0,2        ;test memory save bit
+    ;recall VFO from specified memory channel and return
+    ;there's not need to process the remaining bits
+        goto    recallmode      
+        
+    ;save VFO into specified memory channel and return
+    ;there's not need to process the remaining bits
+        goto    prgmode         ;
+
+gen13   movlw   low srx5        ;
+        movwf   nbfrom          ;
+
 cnv_generic1
+        movlw   5               ;copy 5 bytes
+        movwf   nbloop          ;save copy count
+        movlw   low Srx5        ;
+        movwf   nbto            ;
+        bsf     STATUS,RP0      ;bank 1
+        call    copy1_0         ;
+        bcf     STATUS,RP0      ;bank 0
         bcf     icomflags,COM_FLAG_TXOFF ;Not Tx frequency select (yet)
-        movf    srx2,w          ;get 2'nd byte from serial stream
+        movf    Srx2,w          ;get 2'nd byte from serial stream
         andlw   0xf             ;
         movwf   temp_0          ;save
 
@@ -1325,17 +1472,17 @@ gensetband
         clrf    temp_1          ;
         clrf    temp_0          ;
         call    tempx10         ;
-        movf    srx3,w          ;get Mhz digit
+        movf    Srx3,w          ;get Mhz digit
         call    addw2temp       ;
         call    tempx10         ;
-        swapf   srx4,w          ;get 100Khz digit
+        swapf   Srx4,w          ;get 100Khz digit
         call    addw2temp       ;
         call    tempx10         ;
-        movf    srx4,w          ;get 10Khz digit
+        movf    Srx4,w          ;get 10Khz digit
         call    addw2temp       ;
         call    tempx10         ;
         movlw   5               ;
-        btfsc   srx3,6          ;jump if not +5 Khz
+        btfsc   Srx3,6          ;jump if not +5 Khz
         call    addw2temp       ;
         call    tempx10         ;
         btfsc   ConfUF,CONFIG_2_5_SEL
@@ -1343,7 +1490,7 @@ gensetband
 
         ;add 2.5 Khz to frequency if UF6 is high
         movlw   d'25'           ;
-        btfsc   srx1,CONFIG_2_5_SEL
+        btfsc   Srx1,CONFIG_2_5_SEL
         call    addw2temp1      ;add 2.5 Khz
 
 gen4    call    tempx10         ;
@@ -1352,42 +1499,46 @@ gen4    call    tempx10         ;
         goto    settxoff        ;
 ;copy new frequency to transmit and receive frequency
         call    setrxtx         ;
-        btfsc   srx3,4          ;Positive TX offset ?
+        btfsc   Srx3,4          ;Positive TX offset ?
         goto    genplus         ;
-        btfss   srx3,5          ;Negative TX offset ?
+        btfss   Srx3,5          ;Negative TX offset ?
         call    MinusOffset     ;do it if so
 
 gensimplex
-        movfw   srx5            ;get PL code
+        movfw   Srx5            ;get PL code
         andlw   0x3f            ;
         call    SetPL           ;set it
-        btfss   srx5,6          ;jump if PL encode is enabled
+        btfss   Srx5,6          ;jump if PL encode is enabled
         call    SetTxCS         ;disable PL encode
-        btfss   srx5,7          ;jump if PL decode is enabled
+        btfss   Srx5,7          ;jump if PL decode is enabled
         call    SetRxCS         ;disable PL decode
-        movf    ConfUF,w        ;Get User function configuration
-        andwf   srx1,f          ;mask bits to zero that aren't configured as
-                                ;user function outputs
-        xorlw   0xff            ;invert mask
-        andwf   PORTD,w         ;get bits we're keeping
-        iorwf   srx1,w          ;or in UF bits
-        movwf   PORTD           ;output new port D bits
         
    ;set high/medium/low power
         
-        movlw   high gensetpwr  ;get ready for indirect call
+gen6    movlw   high gensetpwr  ;get ready for indirect call
         movwf   PCLATH          ;
-        swapf   srx2,w          ;get power bits
+        swapf   Srx2,w          ;get power bits
         andlw   0x3             ;
         call    gensetpwr       ;
-        goto    SetFreqs        ;
+        call    SetFreqs        ;
 
-uf_only movf    ConfUF,w        ;Get User function configuration
-        andwf   srx5,f          ;mask bits to zero that aren't configured as
+   ;Set UF bits
+      
+setuf   movlw   CONFIG_UF_AS_SQUELCH
+        andwf   Config0,w       ;
+        btfsc   STATUS,Z        ;
+        goto    gen5            ;
+        
+        ;UF is 8 bit squelch level
+        movfw   Srx1            ;
+        goto    SetSquelchPot   ;
+
+gen5    movf    ConfUF,w        ;Get User function configuration
+        andwf   Srx7,f          ;mask bits to zero that aren't configured as
                                 ;user function outputs
         xorlw   0xff            ;invert mask
         andwf   PORTD,w         ;get bits we're keeping
-        iorwf   srx5,w          ;or in UF bits
+        iorwf   Srx7,w          ;or in UF bits
         movwf   PORTD           ;output new port D bits
         return                  ;
         
@@ -1475,6 +1626,11 @@ settxoff
         global  cnvcactus
 cnvcactus
         bsf     icomflags,COM_FLAG_BAD_DATA
+        return                  ;nope
+        
+        ifdef   BROKEN
+cnvcactus
+        bsf     icomflags,COM_FLAG_BAD_DATA
         ;all of the data bits should have been shifted in by now
         bsf     STATUS,RP0      ;bank 1
         movf    srxcnt,f        ;
@@ -1485,19 +1641,19 @@ cnvcactus
 ;In cactus mode we should have N x 3 bytes of serial data were
 ;N = 1, 2, 3 or 4.
         movlw   d'24'           ;3 bytes ?
-        subwf   srxbits,w       ;
+        subwf   Srxbits,w       ;
         btfsc   STATUS,Z        ;
         goto    cactus1         ;
         movlw   d'48'           ;6 bytes ?
-        subwf   srxbits,w       ;
+        subwf   Srxbits,w       ;
         btfsc   STATUS,Z        ;
         goto    cactus1         ;
         movlw   d'72'           ;9 bytes ?
-        subwf   srxbits,w       ;
+        subwf   Srxbits,w       ;
         btfsc   STATUS,Z        ;
         goto    cactus1         ;
         movlw   d'96'           ;12 bytes ?
-        subwf   srxbits,w       ;
+        subwf   Srxbits,w       ;
         btfss   STATUS,Z        ;
         return                  ;nope !
         
@@ -1511,36 +1667,36 @@ cactus1 bcf     icomflags,COM_FLAG_BAD_DATA
         bcf     STATUS,RP0      ;bank 0
         return                  ;data hasn't changed
         
-        ;data passes initial tests our data is in srx5 .. srx3
+        ;data passes initial tests our data is in Srx5 .. Srx3
         ;data is inverted, fix it
 cactus6        
         bcf     STATUS,RP0      ;bank 0
-        comf    srx5,f          ;
-        comf    srx4,f          ;
-        comf    srx3,f          ;
+        comf    Srx5,f          ;
+        comf    Srx4,f          ;
+        comf    Srx3,f          ;
         
         ;Set tx power level outputs
-        btfss   srx4,0          ;
+        btfss   Srx4,0          ;
         goto    cactus4         ;not QRP
         call    lowpower        ;
         goto    cactus2         ;continue
 
 cactus4        
-        btfss   srx4,1          ;
+        btfss   Srx4,1          ;
         goto    cactus5         ;not high power
         call    highpower       ;
         goto    cactus2         ;continue
         
 cactus5 call    normalpower     ;
         
-cactus2 movfw   srx3            ;get PL code
+cactus2 movfw   Srx3            ;get PL code
         andlw   0x1f            ;
         call    SetPL           ;set it
         ;The cactus control system doesn't have a PL decode enable
         ;bit so if encode is enabled we'll enable both.  If carrier
         ;squelch is desired while encoding tone the control system
         ;hangup box line can be used to achieve this.
-        btfss   srx3,5          ;jump if PL encode is disabled
+        btfss   Srx3,5          ;jump if PL encode is disabled
         goto    cactus7         ;
         call    SetTxCS         ;disable PL encode
         call    SetRxCS         ;disable PL decode
@@ -1557,17 +1713,17 @@ cactus7
         clrf    temp_1          ;
         clrf    temp_0          ;
         call    tempx10         ;
-        swapf   srx5,w          ;get Mhz digit
+        swapf   Srx5,w          ;get Mhz digit
         call    addw2temp       ;
         call    tempx10         ;
-        movf    srx5,w          ;get 100Khz digit
+        movf    Srx5,w          ;get 100Khz digit
         call    addw2temp       ;
         call    tempx10         ;
-        swapf   srx4,w          ;get 10Khz digit
+        swapf   Srx4,w          ;get 10Khz digit
         call    addw2temp       ;
         call    tempx10         ;
         movlw   5               ;
-        btfsc   srx4,3          ;jump if not +5 Khz
+        btfsc   Srx4,3          ;jump if not +5 Khz
         call    addw2temp       ;
         call    tempx10         ;
         call    tempx10         ;
@@ -1587,6 +1743,7 @@ crcmhzlookup
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
         retlw   d'14'           ;not used
+        endif
 
 changeok1
         call    changemode      ;
@@ -1615,7 +1772,7 @@ setsrxcnt
 srxbittbl
         addwf   PCL,f           ;
         retlw   0               ;0: no control system
-        retlw   d'40'           ;1: Doug Hall - 5 bytes
+        retlw   d'56'           ;1: Doug Hall - up to 7 bytes
         retlw   d'24'           ;2: Palomar RB1 - 3 bytes
         retlw   0               ;3: not used
         retlw   0               ;4: not used
@@ -1623,7 +1780,7 @@ srxbittbl
         retlw   d'48'           ;6: Palomar RB2 - 6 bytes
         retlw   0               ;7: not used
         retlw   0               ;8: not used
-        retlw   0               ;9: not used
+        retlw   d'56'           ;9: Dough Hall w/ Squelch pot - up to 5 bytes
         retlw   d'72'           ;10: Palomar RB3 - 9 bytes
         retlw   0               ;11: not used
         retlw   0               ;12: not used
@@ -1648,7 +1805,7 @@ cnvjmptbl
         goto    cnvcactus       ;6: Palomar RB2
         return                  ;7: not used
         return                  ;8: not used
-        return                  ;9: not used
+        goto    cnv_generic     ;9: Doug Hall w/ UF as squelch
         goto    cnvcactus       ;10: Palomar RB3
         return                  ;11: not used
         return                  ;12: not used
@@ -1688,6 +1845,40 @@ highpower
         bcf     PORTD,CONFIG_QRP
         btfss   ConfUF,CONFIG_HI_PWR    ;don't set output bit if user output
         bsf     PORTD,CONFIG_HI_PWR
+        return
+        
+
+;send 8 bit pot value in w to pot
+SetSquelchPot
+        movwf   Squelch         ;save pot value
+        movlw   CONFIG_SQU_POT_MASK
+        andwf   ConfUF,w        ;
+        btfss   STATUS,Z        ;
+        return                  ;not configured for a squelch pot
+        movlw   0x11            ;get command: byte write data, pot 0
+        bcf     PORTD,CONFIG_POT_CS     ;cs low
+        call    SendByte2Pot    ;send command byte
+        movf    Squelch,w       ;get pot value
+        call    SendByte2Pot    ;send it
+        bsf     PORTD,CONFIG_POT_CS     ;cs high
+        return                  ;
+
+;send byte in w to pot
+SendByte2Pot
+        movwf   temp_1          ;
+        movlw   8               ;8 bit to send
+        movwf   LoopCntr        ;set loop counter
+pot1    btfss   temp_1,7        ;test msb
+        goto    pot2            ;bit is low
+        bsf     PORTD,CONFIG_POT_SI     ;set bit high
+        goto    pot3            ;
+pot2    bcf     PORTD,CONFIG_POT_SI     ;set bit low
+
+pot3    rlf     temp_1,f        ;get ready for the next bit
+        bcf     PORTD,CONFIG_POT_SCLK   ;set clock low
+        bsf     PORTD,CONFIG_POT_SCLK   ;set clock high
+        decfsz  LoopCntr,f
+        goto    pot1
         return
         
         ;END of PROG1 code new ADD new PROG1 code here
