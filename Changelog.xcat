@@ -1,4 +1,10 @@
 ####################################
+Changes in version 0.28 7/18/2007 (not shipped to anyone)
+
+New features:
+1. Added support for digital volume port (untested).
+
+####################################
 Changes in version 0.27 7/18/2007
 
 New features:
@@ -7,7 +13,7 @@ New features:
    Previous versions only supported the 1 and 5 bytes variations.  Bytes
    6 and 7 provide scanning control, squelch control, and memory channel 
    (mode) save and restore.
-3. Massive modifications to code plug data ISR and mode refersh logic to 
+3. Massive modifications to code plug data ISR and mode refresh logic to 
    allow scanning to be turned off reliably.
 
 ####################################
@@ -15,7 +21,7 @@ Changes in version 0.26 2/3/2007 (not shipped to anyone)
 
 Bug fixes:
 1. Attempted to fix for lack of an ack following an SetCommunications 
-   parameters  (command. The modifications weren't quite right, but it 
+   parameters command. The modifications weren't quite right, but it 
    basically worked.
 
 Minor enhancements: 
@@ -23,7 +29,7 @@ Minor enhancements:
    enabled and the bootloader doesn't support the watchdog (yet).
 
 ####################################
-Changes in version 0.25 1/31/2007  (shipped to n7hqz@suddenlink.net)
+Changes in version 0.25 1/31/2007
 
 Bug fixes:
 In theory these changes should not have effected anything other than operation 

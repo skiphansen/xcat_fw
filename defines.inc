@@ -1,5 +1,8 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.6  2008/05/11 13:34:49  Skip
+; Added (untested) support for digital volume pot.
+;
 ; Revision 1.5  2007/07/18 18:41:01  Skip
 ; 1. Added the current Squelch pot level to config info sent/received and
 ;    stored in EEPROM.
@@ -45,7 +48,7 @@
 
 ;Adr 44 -> 46 Configuration bytes
 #define CONFIG_EEPROM_ADR       d'44'
-#define CONFIG_BYTES            3
+#define CONFIG_BYTES            4
 
 ;Configuration byte 0 read from EEPROM on powerup
 
@@ -104,6 +107,8 @@
 #define CONFIG_SQU_POT_MASK     0x58                                
 
 ;Configuration byte 2: SquelchLevel
+
+;Configuration byte 3: VolumeLevel
 
 ;icomflags bit definitions
 #define COM_FLAG_LSB1ST 0

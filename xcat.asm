@@ -19,6 +19,9 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.9  2008/05/11 13:34:49  Skip
+; Added (untested) support for digital volume pot.
+;
 ; Revision 1.8  2007/07/18 18:48:34  Skip
 ; 1. Added digital squelch port support.
 ; 2. Added support for 7 byte Doug Hall/Generic protocol.
@@ -187,6 +190,9 @@ Config0 res     1       ;Configuration byte 0
 ConfUF  res     1       ;User function output
         global  Squelch
 Squelch res     1       ;squelch pot level
+        global  Volume
+Volume  res     1       ;volume pot level
+
 ; -------------------------------------------------------------------------
 
 selmode res     1       ;mode data last read which is not necessarily the 
@@ -304,7 +310,7 @@ dloop   decfsz  selmode,f
 
         movlw   high mode_1
         movwf   PCLATH          ;
-	nop			;
+        nop                     ;
 
         movf    PORTC,w         ;w = PORTC with stable address (this should occur 129 cycles after /oe)
         movwf   LastC
@@ -370,8 +376,8 @@ delayloop
         btfsc   PORTC,5         ;
         movlw   high mode_17
         movwf   PCLATH          ;
-        nop			;
-        nop			;
+        nop                     ;
+        nop                     ;
         movf    PORTA,w         ;w = A0->A5 (this should occur 129 cycles after /oe)
         btfsc   PORTC,3         ;
         iorlw   0x40            ;

@@ -1,4 +1,7 @@
 ;$Log: icom.asm,v $
+;Revision 1.9  2008/05/11 13:34:49  Skip
+;Added (untested) support for digital volume pot.
+;
 ;Revision 1.8  2007/07/18 18:38:43  Skip
 ;1. Added digital squelch port support.
 ;2. Added support for 7 byte Doug Hall/Generic protocol.
@@ -162,7 +165,7 @@ PROG2           code
         extern  srx1,srx2,srx3,srx4,srx5,srx6,srx7
         extern  srx7_d,srxto_d,srxgood,stxgood
         extern  GetBaudRate,GetCIVAdr,srxcnt_d
-        extern  Squelch
+        extern  Squelch,Volume
         extern  nbloop,nbfrom,nbto
 
 #define LoopCntr        DivA
@@ -207,6 +210,8 @@ serialinit
         movwf   PCLATH          ;
         movf    Squelch,w
         call    SetSquelchPot   ;init pot level
+        movf    Volume,w        ;
+        call    SetVolumePot    ;set pot level
         
         ;initialize UART
 serialinit2
@@ -706,13 +711,15 @@ trycmdaa
 ; 0x0a - Set communications parameters
 ; 0x8a - Set communications parameters ACK
 ; 0x0b - Set squelch level
-; 0x8a - Set squelch level ACK
+; 0x8b - Set squelch level ACK
+; 0x0c - Set volume level
+; 0x8c - Set volume level ACK
 ;
 ;  Cmd     Data_0         Data_1 ... Data_16
 ; <0xaa>   [0x01 | 0x80 ]  <16 bytes of raw data in code plug format>
 ;
 ;
-        movlw   0xc             ;> max sub command ?
+        movlw   0xd             ;> max sub command ?
         subwf   Data_0,w        ;
         btfsc   STATUS,C        ;
         goto    SendNG          ;
@@ -732,6 +739,7 @@ aasub   addwf   PCL,f
         goto    GetSyncDebug    ;0x9 - get sync data debug info
         goto    SetCommParam    ;0xa - Set communications parameters
         goto    SetSquelchLvl   ;0xb - Set squelch level
+        goto    SetVolLvl       ;0xc - Set volume level
 
 ;subcommand 0: get raw VFO data
 getcpdat
@@ -772,7 +780,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'2'            ;
         movwf   Data_5          ;
-        movlw   a'7'            ;
+        movlw   a'8'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -948,7 +956,14 @@ SetSquelchLvl
         movf    Data_1,w        ;get level
         BCF     STATUS,RP0      ;Bank 0
         call    SetSquelchPot   ;set pot level
-        BSF     STATUS,RP0      ;Bank 1
+        goto    pot5            ;continue
+
+;subcommand 0xc - Set volume level
+SetVolLvl
+        movf    Data_1,w        ;get level
+        BCF     STATUS,RP0      ;Bank 0
+        call    SetVolumePot    ;set pot level
+pot5    BSF     STATUS,RP0      ;Bank 1
         movlw   0x8b            ;
 ;       goto    sendxcatack     ;kick it off
 
@@ -1331,6 +1346,12 @@ gen12   movlw   CONFIG_UF_AS_SQUELCH
         swapf   temp_0,w        ;copy into upper 4 bits
         iorwf   temp_1,w        ;
         call    SetSquelchPot   ;
+        bsf     STATUS,RP0      ;bank 1
+        movf    srx6,w          ;
+        bcf     STATUS,RP0      ;bank 0
+        andlw   0xf0            ;get volume bits
+        call    SetVolumePot    ;
+        
     ;process byte 7
 gen9    bsf     STATUS,RP0      ;bank 1
         movf    srx7,w          ;
@@ -1848,17 +1869,29 @@ highpower
         return
         
 
+;send 8 bit pot value in w to volume
+SetVolumePot
+        movwf   Volume          ;save pot value
+        movwf   temp_2          ;
+        movlw   0x12            ;get command: byte write data, pot 1
+        movwf   temp_3          ;save it
+        goto    pot4            ;continue
+
 ;send 8 bit pot value in w to pot
 SetSquelchPot
         movwf   Squelch         ;save pot value
-        movlw   CONFIG_SQU_POT_MASK
+        movwf   temp_2          ;
+        movlw   0x11            ;get command: byte write data, pot 0
+        movwf   temp_3          ;save it
+        
+pot4    movlw   CONFIG_SQU_POT_MASK
         andwf   ConfUF,w        ;
         btfss   STATUS,Z        ;
-        return                  ;not configured for a squelch pot
-        movlw   0x11            ;get command: byte write data, pot 0
+        return                  ;not configured for pots
         bcf     PORTD,CONFIG_POT_CS     ;cs low
+        movf    temp_3,w        ;get command
         call    SendByte2Pot    ;send command byte
-        movf    Squelch,w       ;get pot value
+        movf    temp_2,w        ;get pot value
         call    SendByte2Pot    ;send it
         bsf     PORTD,CONFIG_POT_CS     ;cs high
         return                  ;
