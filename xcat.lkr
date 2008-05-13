@@ -1,4 +1,7 @@
 // $Log: xcat.lkr,v $
+// Revision 1.5  2008/05/13 14:56:20  Skip
+// Added DEBUG section for debug variables at the end of page 2.
+//
 // Revision 1.4  2007/07/18 18:41:59  Skip
 // Increased comram size by 3 bytes for new bank copy routines.
 //
@@ -32,7 +35,8 @@ DATABANK   NAME=sfr2     START=0x100    END=0x10F    PROTECTED
 DATABANK   NAME=sfr3     START=0x180    END=0x18F    PROTECTED
 
 DATABANK   NAME=gpr0     START=0x20     END=0x7a
-DATABANK   NAME=gpr1     START=0xA0     END=0xef
+DATABANK   NAME=gpr1     START=0xA0     END=0xde
+DATABANK   NAME=dbug     START=0xdf     END=0xef
 DATABANK   NAME=gpr2     START=0x110    END=0x16F
 DATABANK   NAME=gpr3     START=0x190    END=0x1EF
 
@@ -62,6 +66,7 @@ SECTION    NAME=MODE2    ROM=tbl3       // ROM code space - page3
 SECTION    NAME=DATA0    RAM=gpr0       // Bank 0 RAM
 
 // data page 1: serial I/O, sync control system I/O
+SECTION    NAME=DEBUG    RAM=dbug       // Bank 1 RAM
 SECTION    NAME=DATA1    RAM=gpr1       // Bank 1 RAM
 SECTION    NAME=DATA2    RAM=gpr2       // Bank 2 RAM
 SECTION    NAME=DATA3    RAM=gpr3       // Bank 3 RAM
