@@ -1,4 +1,12 @@
 ####################################
+Changes in version 0.29 5/13/2008
+
+Bug fixes:
+1. Corrected a bug in the Doug Hall mode that prevented a transmitter offset 
+   from being set explicitly.  Note: this is different than selecting 
+   transmit plus, minus, or simplex which operated correctly.
+
+####################################
 Changes in version 0.28 7/18/2007 (not shipped to anyone)
 
 New features:
