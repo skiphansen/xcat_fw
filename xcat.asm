@@ -19,6 +19,16 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.10  2008/05/13 14:55:44  Skip
+; 1. Removed __config directive, this should only be in the loader.
+; 2. Moved debug data to end of page2, added srxlen (Palomar code
+;     debug var), wd_count, bo_count and unk_count to debug variables.
+; 3. Added code to increment wd_count, bo_count, and unk_count for
+;    watchdog timeouts, brownout resets and unknown resets.  NB: requires
+;    updated loader that copies STATUS register immediately after reset to
+;    0x7f.
+; 4. Modified power on RAM clear function to avoid clearing reset counters.
+;
 ; Revision 1.9  2008/05/11 13:34:49  Skip
 ; Added (untested) support for digital volume pot.
 ;
@@ -95,8 +105,6 @@
         global  txf_0,txf_1,txf_2,txf_3
         global  fvco_0,fvco_1,fvco_2,fvco_3
         global  DivA,N1_0,N1_1,N1_2,N1_3
-
-        __config  _HS_OSC & _BODEN_ON & _CP_OFF & _PWRTE_ON & _WDT_OFF & _LVP_OFF
 
 ;variables present in all banks
 COMMON  udata
@@ -244,6 +252,7 @@ srxto   res     1
 ;serial stream
 srxcnt  res     1
 
+DEBUG   udata
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;NB do not change the order of the following
 ;Copy of above variables at last sync data timeout for debug
@@ -268,6 +277,19 @@ srxgood res     1               ;number of frames that set a RX frequency
 stxgood res     1               ;number of frames that set a TX frequency
         global  srxbad          ;
 srxbad  res     1               ;number of invalid frames
+
+;In Palomar mode we can't wait for a timeout because a serial frame
+;is sent whenever a transmission is made that that could be immediately
+;after one of the periodic updates.  So... in Palomar mode we save the 
+;number of bits in a serial frame here so we know when to process the data.
+;
+        global  srxlen
+srxlen  res     1
+wd_count res    1               ;
+bo_count res    1               ;
+unk_count res   1               ;
+;
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
         ; Start at the reset vector
@@ -516,6 +538,44 @@ vfof    movf    code_f,w
 PROG2   code
 
 startup1
+        BCF     STATUS,RP1      ;Bank 1
+        BSF     STATUS,RP0      ;Bank 1
+        btfsc   PCON,NOT_POR    ;
+        goto    start1          ;not a power on reset
+        ;power on reset
+        clrf    wd_count        ;
+        clrf    bo_count        ;
+        clrf    unk_count       ;
+        goto    start3          ;
+        
+start1  btfsc   PCON,NOT_BOR    ;
+        goto    start2          ;not a brownout reset
+        ;brownout reset
+        incf    bo_count,w      ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    bo_count,f      ;
+        goto    start3          ;
+        
+        ;NB: we don't test STATUS,NOT_TO because the loader resets the 
+        ;watchdog.  The loader stores the STATUS register at 0x7f before
+        ;it resets the watchdog the first time so we can test it here.
+start2
+;       btfsc   STATUS,NOT_TO   ;
+        btfsc   0x7f,NOT_TO     ;
+        goto    start4          ;Say what ?
+        ;Watchdog timeout 
+        incf    wd_count,w      ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    wd_count,f      ;
+        goto    start3          ;
+
+start4  incf    unk_count,w     ;
+        btfss   STATUS,Z        ;don't roll over counter
+        incf    unk_count,f     ;
+
+start3  bsf     PCON,NOT_BOR    ;Reset BOR, POR bits for next time
+        bsf     PCON,NOT_POR    ;
+
 ;Clear all of RAM
         clrf    STATUS          ;bank 0
         movlw   0x20            ;start of RAM
@@ -532,7 +592,8 @@ clrloop clrf    INDF            ;
         movwf   FSR             ;
 clr1    clrf    INDF            ;
         incf    FSR,f           ;
-        movf    FSR,w           ;
+        movlw   low wd_count    ;end of RAM to clear in Bank 1
+        subwf   FSR,w           ;
         btfss   STATUS,Z        ;
         goto    clr1            ;
         
@@ -631,11 +692,11 @@ clr3    clrf    INDF            ;
         movwf   code_9          ;
         movwf   code_a          ;
         
-ifdef   SIMULATE
+        ifdef   SIMULATE
         movlw   high tests      
         movwf   PCLATH          ;
         call    tests           ;        
-endif        
+        endif        
         return
 
         ;read 32 bit int from FLASH into BARGB3 .. BARGB0
