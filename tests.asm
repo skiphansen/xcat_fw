@@ -1,4 +1,7 @@
 ; $Log: tests.asm,v $
+; Revision 1.2  2008/05/13 14:48:04  Skip
+; Added TEST_GENERIC94, TEST_GENERIC435.
+;
 ; Revision 1.1  2007/07/18 18:35:25  Skip
 ; Initial import - test code removed from xcat.asm and in a different bank.
 ;
@@ -134,10 +137,11 @@ tests
         bcf     STATUS,RP0      ;bank 0
         endif
 
+        ifdef   TEST_GENERIC94
         movlw   0x13            ;
         movwf   Config0         ;
         bsf     STATUS,RP0      ;bank 1
-        movlw   0xff            ;load 146.52
+        movlw   0xff            ;load 146.94
         movwf   srx1            ;UF
         movlw   0xf2            ;
         movwf   srx2            ;tx, rx on, low power, 2 meters
@@ -155,7 +159,27 @@ tests
         movwf   srxbits         ;
         clrf    srxto           ;clear timeout counter
         bcf     STATUS,RP0      ;bank 0
-        
+        endif
+
+        ifdef TEST_GENERIC435        
+        movlw   0x13            ;
+        movwf   Config0         ;
+        bsf     STATUS,RP0      ;bank 1
+        movlw   0xff            ;load 147.00
+        movwf   srx3            ;UF
+        movlw   0xf2            ;
+        movwf   srx4            ;tx, rx on, low power, 2 meters
+        movlw   0xa7            ;radio power on, not +5, simplex, 146
+        movwf   srx5            ;
+        movlw   0x00            ;.52
+        movwf   srx6            ;
+        movlw   0x00            ;
+        movwf   srx7            ;
+        movlw   d'40'           ;
+        movwf   srxbits         ;
+        clrf    srxto           ;clear timeout counter
+        bcf     STATUS,RP0      ;bank 0
+        endif
         return
         
         end

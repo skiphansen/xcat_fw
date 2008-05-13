@@ -1,5 +1,8 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.7  2008/05/13 14:48:04  Skip
+; Added TEST_GENERIC94, TEST_GENERIC435.
+;
 ; Revision 1.6  2008/05/11 13:34:49  Skip
 ; Added (untested) support for digital volume pot.
 ;
@@ -28,6 +31,8 @@
 ;#define VHF_RANGE_2
 ;#define TEST_GENERIC
 ;#define TEST_GENERIC7
+;#define TEST_GENERIC94
+;#define TEST_GENERIC435
 ;#define TEST_PALOMAR
 ;#define DEBUG_MODE_SEL
 
