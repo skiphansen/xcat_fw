@@ -1,4 +1,10 @@
 ;$Log: icom.asm,v $
+;Revision 1.10  2008/05/13 14:47:16  Skip
+;1. Changed version to 0.29.
+;2. Added srxlen (Palomar code debug var), wd_count, bo_count and
+;   unk_count to debug variables.
+;3. Corrected bugs in the Doug Hall mode's set transmitter offset function.
+;
 ;Revision 1.9  2008/05/11 13:34:49  Skip
 ;Added (untested) support for digital volume pot.
 ;
@@ -780,7 +786,7 @@ getver  movf    From_Adr,w      ;copy from adr into
         movwf   Data_4          ;
         movlw   a'2'            ;
         movwf   Data_5          ;
-        movlw   a'8'            ;
+        movlw   a'9'            ;
         movwf   Data_6          ;
         movlw   0xfd            ;
         movwf   Data_7          ;end of response
@@ -911,7 +917,7 @@ GetSyncDebug
         movwf   NextTxState     ;
         movlw   low srx7_d      ;
         movwf   txdpointer      ;
-        movlw   d'13'           ;13 bytes to send
+        movlw   d'17'           ;17 bytes to send
         movwf   txdatacount     ;
         movlw   0x89            ;
         goto    sendxcatresp    ;kick it off
@@ -1470,13 +1476,15 @@ gen6m   movlw   5               ;
 gen3    movlw   1               ;10 meters ?
         subwf   temp_0,w        ;
         btfsc   STATUS,Z        ;
+        goto    gen14           ;yup
+        
         ;Not a known frequency band, assume it's a transmitter offset
         bsf     icomflags,COM_FLAG_TXOFF ;Tx frequency select
         clrw                    ;
         goto    gensetband      ;
 
         ;10 meter frequency
-        movf    Config0,f       ;
+gen14   movf    Config0,f       ;
         andlw   CONFIG_BAND_MASK;
         btfsc   STATUS,Z        ;configured as a 10 meter radio ?
         goto    gen10m          ;Yup, a 10 meter radio
@@ -1520,7 +1528,7 @@ gen4    call    tempx10         ;
         goto    settxoff        ;
 ;copy new frequency to transmit and receive frequency
         call    setrxtx         ;
-        btfsc   Srx3,4          ;Positive TX offset ?
+gen15   btfsc   Srx3,4          ;Positive TX offset ?
         goto    genplus         ;
         btfss   Srx3,5          ;Negative TX offset ?
         call    MinusOffset     ;do it if so
@@ -1576,7 +1584,17 @@ settxoff
         movwf   TxOff_2
         movf    temp_3,w
         movwf   TxOff_3
-        return
+        ;copy Rx to Tx
+        movf    rxf_0,w
+        movwf   txf_0
+        movf    rxf_1,w
+        movwf   txf_1
+        movf    rxf_2,w
+        movwf   txf_2
+        movf    rxf_3,w
+        movwf   txf_3
+        ;calculate and set new Tx frequency
+        goto    gen15
 
 ;
 ;Cactus format:  LSB of byte 1 shifted out first
@@ -1801,7 +1819,7 @@ srxbittbl
         retlw   d'48'           ;6: Palomar RB2 - 6 bytes
         retlw   0               ;7: not used
         retlw   0               ;8: not used
-        retlw   d'56'           ;9: Dough Hall w/ Squelch pot - up to 5 bytes
+        retlw   d'56'           ;9: Doug Hall w/ Squelch pot - up to 7 bytes
         retlw   d'72'           ;10: Palomar RB3 - 9 bytes
         retlw   0               ;11: not used
         retlw   0               ;12: not used
