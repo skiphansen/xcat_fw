@@ -19,6 +19,10 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.12  2008/05/25 05:44:04  Skip
+; Added code to SyncClkInit to unkey transmitter on initialization in Palomar
+; mode.
+;
 ; Revision 1.11  2008/05/25 05:35:22  Skip
 ; Merged some of the Palomar/Cactus code changes from Vers 0.23a. The
 ; exotic changes to the ISR were tossed.  They weren't effective anyway.
@@ -749,6 +753,12 @@ rd_loop BSF     STATUS,RP1      ;Bank 3
 
 ;enable interrupt on Synchronous clock (ccp2 input)
 SyncClkInit
+        swapf   Config0,w       ;
+        andlw   CONFIG_CTRL_MASK;
+        sublw   1               ;Doug Hall mode ?
+        btfss   STATUS,Z        ;skip if so
+        bsf     PORTD,CONFIG_PTT_OUT    ;unkey Tx for Palomar mode
+
         movlw   4               ;capture mode, every falling edge
         movwf   CCP2CON         ;
 
