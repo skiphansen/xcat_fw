@@ -1,4 +1,7 @@
 ;$Log: icom.asm,v $
+;Revision 1.12  2008/05/25 05:42:56  Skip
+;Bumped version number to 0.31.
+;
 ;Revision 1.11  2008/05/25 05:31:29  Skip
 ;1. Merged Palomar/Cactus code changes from Vers 0.23a.
 ;2. Moved Palomar, Squelch Pot, and get Version code into PROG3.
@@ -2019,7 +2022,7 @@ GetVer  movf    From_Adr,w      ;copy from adr into
         movwf   Data_11         ;
         movlw   a'3'            ;
         movwf   Data_5          ;
-        movlw   a'0'            ;
+        movlw   a'1'            ;
         movwf   Data_6          ;
         movlw   a'/'            ;
         movwf   Data_7          ;
