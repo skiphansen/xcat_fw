@@ -1,4 +1,14 @@
 ;$Log: icom.asm,v $
+;Revision 1.11  2008/05/25 05:31:29  Skip
+;1. Merged Palomar/Cactus code changes from Vers 0.23a.
+;2. Moved Palomar, Squelch Pot, and get Version code into PROG3.
+;3. Added loader version number to get version request.
+;4. Modified Palomar code to allow PTT to be routed thru the Xcat to prevent
+;   interrupt conflicts between serial data and the Syntor reading the code
+;   plug data in response to PTT.  The PTT in line is now copied to the PTT
+;   out line after each block of data is received from the Palomar.  Hopefully
+;   this should prevent ISR collisions.
+;
 ;Revision 1.10  2008/05/13 14:47:16  Skip
 ;1. Changed version to 0.29.
 ;2. Added srxlen (Palomar code debug var), wd_count, bo_count and
@@ -169,7 +179,7 @@ PROG2           code
 
         extern  mode,Config0,ConfUF,code_0,code_8,code_9,code_a,srxcnt
         extern  srx1,srx2,srx3,srx4,srx5,srx6,srx7
-        extern  srx7_d,srxto_d,srxgood,stxgood
+        extern  srx7_d,srxto_d,srxgood,stxgood,srxbits_d,srxlen
         extern  GetBaudRate,GetCIVAdr,srxcnt_d
         extern  Squelch,Volume
         extern  nbloop,nbfrom,nbto
@@ -466,7 +476,7 @@ txstate5
         movlw   4               ;and then state 4
         movwf   NextTxState     ;
         goto    txstate2        ;
-
+        
         ;END of PROG2 code new ADD new PROG2 code here
 
 PROG1   code
@@ -772,25 +782,7 @@ changeok
         goto    changeok1       ;
 
 ;subcommand 2: get firmware version
-getver  movf    From_Adr,w      ;copy from adr into
-        movwf   To_Adr          ;to adr
-        movlw   0x82            ;
-        movwf   Data_0          ;
-        movlw   a'V'            ;
-        movwf   Data_1          ;
-        movlw   a' '            ;
-        movwf   Data_2          ;
-        movlw   a'0'            ;
-        movwf   Data_3          ;
-        movlw   a'.'            ;
-        movwf   Data_4          ;
-        movlw   a'2'            ;
-        movwf   Data_5          ;
-        movlw   a'9'            ;
-        movwf   Data_6          ;
-        movlw   0xfd            ;
-        movwf   Data_7          ;end of response
-        goto    sendit          ;
+getver  FGOTO   GetVer
 
 ;subcommand 3 - get configuration data
 getconfig
@@ -961,14 +953,14 @@ SetCommParam
 SetSquelchLvl
         movf    Data_1,w        ;get level
         BCF     STATUS,RP0      ;Bank 0
-        call    SetSquelchPot   ;set pot level
+        FCALL   SetSquelchPot   ;set pot level
         goto    pot5            ;continue
 
 ;subcommand 0xc - Set volume level
 SetVolLvl
         movf    Data_1,w        ;get level
         BCF     STATUS,RP0      ;Bank 0
-        call    SetVolumePot    ;set pot level
+        FCALL   SetVolumePot    ;set pot level
 pot5    BSF     STATUS,RP0      ;Bank 1
         movlw   0x8b            ;
 ;       goto    sendxcatack     ;kick it off
@@ -1596,194 +1588,6 @@ settxoff
         ;calculate and set new Tx frequency
         goto    gen15
 
-;
-;Cactus format:  LSB of byte 1 shifted out first
-;NB: Clock and data lines are inverted, the following is shown as true logic.
-;3, 6, 9, or 12 bytes are clocked out depending on the number of remote bases
-;the software has been configured for.  The original hardware had a seperate 
-;load line which was used to transfer the data from the shift register into
-;a parallel latch to driver the radio.
-;The Xcat is configured to know which set of 3 bytes to look at after a timeout
-;rather than trying to use the (too narrow) load pulse.
-;RBC-700 
-
-;
-;  Byte 1: B7 - not used
-; (srx3)   B6 - not used
-;          B5 - 0 = PL encode enabled, 1 = PL encode disabled
-;          B0 -> B4 = PL tone (Communications Specialists TS32 number)
-;
-;  Byte 2: B4 -> B7 10 Khz digit
-; (srx4)   B3 - 5 Khz bit
-;          B2 - not used
-;          B1 - 1 = high power level
-;          B0 - 1 = QRP power level
-;
-;  Byte 3: B4 -> B7 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
-; (srx5)   B0 -> B3 100 Khz digit
-;
-;
-;Communications Specialists TS32 number numbers (binary value + 1):
-;
-;     C.T.C.S.S.   EIA
-;          FREQ.   CODE
-;======================
-;   1       67.0   XZ
-;   2       71.9   XA
-;   3       74.4   WA
-;   4       77.0   XB
-;   5       79.7   SP
-;   6       82.5   YZ
-;   7       85.4   YA
-;   8       88.5   YB
-;   9       91.5   ZZ
-;  10       94.8   ZA
-;  11       97.4   ZB
-;  12      100.0   1Z
-;  13      103.5   1A
-;  14      107.2   1B
-;  15      110.9   2Z
-;  16      114.8   2A
-;  17      118.8   2B
-;  18      123.0   3Z
-;  19      127.3   3A
-;  20      131.8   3B
-;  21      136.5   4Z
-;  22      141.3   4A
-;  23      146.2   4B
-;  24      151.4   5Z
-;  25      156.7   5A
-;  26      162.2   SB
-;  27      167.9   6Z
-;  28      173.8   6A
-;  29      179.9   6B
-;  30      186.2   7Z
-;  31      192.8   7A
-;  32      203.5   Ml
-;====================
-
-        global  cnvcactus
-cnvcactus
-        bsf     icomflags,COM_FLAG_BAD_DATA
-        return                  ;nope
-        
-        ifdef   BROKEN
-cnvcactus
-        bsf     icomflags,COM_FLAG_BAD_DATA
-        ;all of the data bits should have been shifted in by now
-        bsf     STATUS,RP0      ;bank 1
-        movf    srxcnt,f        ;
-        bcf     STATUS,RP0      ;bank 0
-        btfss   STATUS,Z        ;
-        return                  ;nope
-
-;In cactus mode we should have N x 3 bytes of serial data were
-;N = 1, 2, 3 or 4.
-        movlw   d'24'           ;3 bytes ?
-        subwf   Srxbits,w       ;
-        btfsc   STATUS,Z        ;
-        goto    cactus1         ;
-        movlw   d'48'           ;6 bytes ?
-        subwf   Srxbits,w       ;
-        btfsc   STATUS,Z        ;
-        goto    cactus1         ;
-        movlw   d'72'           ;9 bytes ?
-        subwf   Srxbits,w       ;
-        btfsc   STATUS,Z        ;
-        goto    cactus1         ;
-        movlw   d'96'           ;12 bytes ?
-        subwf   Srxbits,w       ;
-        btfss   STATUS,Z        ;
-        return                  ;nope !
-        
-        ;we have a sane number of bits
-cactus1 bcf     icomflags,COM_FLAG_BAD_DATA
-        ;check to see if anything has changed since the last frame
-        
-        bsf     STATUS,RP0      ;bank 1
-        btfsc   b1flags,B1_FLAG_NEW_DATA        ;
-        goto    cactus6
-        bcf     STATUS,RP0      ;bank 0
-        return                  ;data hasn't changed
-        
-        ;data passes initial tests our data is in Srx5 .. Srx3
-        ;data is inverted, fix it
-cactus6        
-        bcf     STATUS,RP0      ;bank 0
-        comf    Srx5,f          ;
-        comf    Srx4,f          ;
-        comf    Srx3,f          ;
-        
-        ;Set tx power level outputs
-        btfss   Srx4,0          ;
-        goto    cactus4         ;not QRP
-        call    lowpower        ;
-        goto    cactus2         ;continue
-
-cactus4        
-        btfss   Srx4,1          ;
-        goto    cactus5         ;not high power
-        call    highpower       ;
-        goto    cactus2         ;continue
-        
-cactus5 call    normalpower     ;
-        
-cactus2 movfw   Srx3            ;get PL code
-        andlw   0x1f            ;
-        call    SetPL           ;set it
-        ;The cactus control system doesn't have a PL decode enable
-        ;bit so if encode is enabled we'll enable both.  If carrier
-        ;squelch is desired while encoding tone the control system
-        ;hangup box line can be used to achieve this.
-        btfss   Srx3,5          ;jump if PL encode is disabled
-        goto    cactus7         ;
-        call    SetTxCS         ;disable PL encode
-        call    SetRxCS         ;disable PL decode
-cactus7        
-        movlw   high crcmhzlookup
-        movwf   PCLATH
-        movf    Config0,w       ;
-        andlw   CONFIG_BAND_MASK;
-        call    crcmhzlookup    ;
-
-        ;w = Mhz hunderds and tens
-        movwf   temp_3          ;Init temp w 100Mhz digit, 10Mhz digit
-        clrf    temp_2          ;
-        clrf    temp_1          ;
-        clrf    temp_0          ;
-        call    tempx10         ;
-        swapf   Srx5,w          ;get Mhz digit
-        call    addw2temp       ;
-        call    tempx10         ;
-        movf    Srx5,w          ;get 100Khz digit
-        call    addw2temp       ;
-        call    tempx10         ;
-        swapf   Srx4,w          ;get 10Khz digit
-        call    addw2temp       ;
-        call    tempx10         ;
-        movlw   5               ;
-        btfsc   Srx4,3          ;jump if not +5 Khz
-        call    addw2temp       ;
-        call    tempx10         ;
-        call    tempx10         ;
-        call    tempx10         ;
-        
-;copy new frequency to transmit and receive frequency
-        call    setrxtx         ;
-        goto    SetFreqs        ;
-
-crcmhzlookup
-        addwf   PCL,f
-        retlw   2               ;10 meters 2x.xxx
-        retlw   5               ;6 meters 5x.xxx
-        retlw   5               ;6 & 10 default to 5x.xxx
-        retlw   d'14'           ;2 meters 14x.xxx
-        retlw   d'44'           ;44x.xxxx
-        retlw   d'14'           ;not used
-        retlw   d'14'           ;not used
-        retlw   d'14'           ;not used
-        endif
-
 changeok1
         call    changemode      ;
         goto    SendOk          ;
@@ -1803,7 +1607,7 @@ setsrxcnt
         andlw   0xf             ;
         call    srxbittbl       ;
         bsf     STATUS,RP0      ;bank 1
-        movwf   srxcnt_d        ;save
+        movwf   srxcnt_d        ;save number of bits we're going to receive
         movwf   srxcnt          ;
         bcf     STATUS,RP0      ;bank 0
         return                  ;
@@ -1859,6 +1663,7 @@ gensetpwr
         goto    normalpower     ;2 = medium power
         return                  ;3 = no power change
 
+
 lowpower
         ;set code plug bit for low power
         bcf     code_8,2
@@ -1885,6 +1690,15 @@ highpower
         btfss   ConfUF,CONFIG_HI_PWR    ;don't set output bit if user output
         bsf     PORTD,CONFIG_HI_PWR
         return
+
+
+        global  cnvcactus
+cnvcactus
+        movlw   high cactus_cont
+        movwf   PCLATH          ;
+        goto    cactus_cont     ;
+        
+PROG3   code
         
 
 ;send 8 bit pot value in w to volume
@@ -1933,6 +1747,330 @@ pot3    rlf     temp_1,f        ;get ready for the next bit
         return
         
         ;END of PROG1 code new ADD new PROG1 code here
+        global  sendsdbg
+sendsdbg
+        BSF     STATUS,RP0      ;Bank 1
+        movlw   0xaa            ;
+        movwf   civ_cmd         ;cmd code
+        clrf    From_Adr        ;will be to adr (broadcast)
+        goto    GetSyncDebug    ; (will return bank 0 selected)
 
+;
+;Cactus format:  LSB of byte 1 shifted out first
+;NB: Clock and data lines are inverted, the following is shown as true logic.
+;3, 6, 9, or 12 bytes are clocked out depending on the number of remote bases
+;the software has been configured for.  The original hardware had a seperate 
+;load line which was used to transfer the data from the shift register into
+;a parallel latch to driver the radio.
+;The Xcat is configured to know which set of 3 bytes to look at after a timeout
+;rather than trying to use the (too narrow) load pulse.
+;RBC-700 
+
+;
+;  Byte 1: B7 - not used
+; (srx5)   B6 - not used
+;          B5 - 0 = PL encode enabled, 1 = PL encode disabled
+;          B0 -> B4 = PL tone (Communications Specialists TS32 number)
+;
+;  Byte 2: B4 -> B7 10 Khz digit
+; (srx6)   B3 - 5 Khz bit
+;          B2 - not used
+;          B1 - 1 = high power level
+;          B0 - 1 = QRP power level
+;
+;  Byte 3: B4 -> B7 Mhz digit (note: 100 Mhz and 10 Mhz digits are implied)
+; (srx7)   B0 -> B3 100 Khz digit
+;
+;
+;Communications Specialists TS32 number numbers (binary value + 1):
+;
+;     C.T.C.S.S.   EIA
+;          FREQ.   CODE
+;======================
+;   1       67.0   XZ
+;   2       71.9   XA
+;   3       74.4   WA
+;   4       77.0   XB
+;   5       79.7   SP
+;   6       82.5   YZ
+;   7       85.4   YA
+;   8       88.5   YB
+;   9       91.5   ZZ
+;  10       94.8   ZA
+;  11       97.4   ZB
+;  12      100.0   1Z
+;  13      103.5   1A
+;  14      107.2   1B
+;  15      110.9   2Z
+;  16      114.8   2A
+;  17      118.8   2B
+;  18      123.0   3Z
+;  19      127.3   3A
+;  20      131.8   3B
+;  21      136.5   4Z
+;  22      141.3   4A
+;  23      146.2   4B
+;  24      151.4   5Z
+;  25      156.7   5A
+;  26      162.2   SB
+;  27      167.9   6Z
+;  28      173.8   6A
+;  29      179.9   6B
+;  30      186.2   7Z
+;  31      192.8   7A
+;  32      203.5   Ml
+;====================
+
+cactus_cont        
+        bsf     icomflags,COM_FLAG_BAD_DATA
+
+        ;If we have exactly 3 bytes then the data is for us no matter which
+        ;remote we are.  This is because when a command is entered to change 
+        ;frequency the new frequency is shifted out to the appropriate
+        ;remote immediately.
+        movlw   d'24'           ;3 bytes ?
+        subwf   Srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        
+        ;all of the data bits should have been shifted in by now
+        bsf     STATUS,RP0      ;bank 1
+        movf    srxcnt,f        ;
+        bcf     STATUS,RP0      ;bank 0
+        btfss   STATUS,Z        ;
+        return                  ;nope
+
+;In cactus mode we should have N x 3 bytes of serial data were
+;N = 2, 3, 4 or 5. (maximum of 4 remotes bases plus microwave card)
+        movlw   d'48'           ;6 bytes ?
+        subwf   Srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'72'           ;9 bytes ?
+        subwf   Srxbits,w       ;
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'96'           ;12 bytes ?
+        btfsc   STATUS,Z        ;
+        goto    cactus1         ;
+        movlw   d'120'          ;15 bytes ?
+        subwf   Srxbits,w       ;
+        btfss   STATUS,Z        ;
+        return                  ;nope !
+        
+        ;we have a sane number of bits
+cactus1 
+        
+        ;data passes initial tests our data is in Srx5 .. Srx3
+        ;data is inverted, fix it
+        ;copy bank1 srx5...srx7, into bank 0 Srx5 ... Srx7
+
+        movlw   3               ;
+        movwf   nbloop          ;        
+        movlw   low srx7        ;
+        movwf   nbfrom          ;
+        movlw   low Srx7        ;
+        movwf   nbto            ;
+        FCALL   copy1_0         ;
+        bcf     STATUS,RP0      ;bank 0
+        comf    Srx7,f          ;
+        comf    Srx6,f          ;
+        comf    Srx5,f          ;
+
+        ;check that the "unused" bits are zero
+        movf    Srx5,w          ;
+        andlw   0xc0            ;
+        btfss   STATUS,Z
+        return                  ;
+
+        movf    Srx6,w          ;
+        andlw   4               ;
+        btfss   STATUS,Z
+        return                  ;
+        
+        ;All sanity check pass        
+        bcf     icomflags,COM_FLAG_BAD_DATA
+
+        ;check to see if anything has changed since the last frame
+        
+        bsf     STATUS,RP0      ;bank 1
+        btfsc   b1flags,B1_FLAG_NEW_DATA        ;
+        goto    cactus6         ;
+        goto    updateptt       ;
+        
+        ;Set tx power level outputs
+cactus6 bcf     STATUS,RP0      ;bank 0
+        btfss   Srx6,0          ;
+        goto    cactus4         ;not QRP
+        FCALL   lowpower        ;
+        goto    cactus2         ;continue
+
+cactus4        
+        btfss   Srx6,1          ;
+        goto    cactus5         ;not high power
+        FCALL   highpower       ;
+        goto    cactus2         ;continue
+        
+cactus5 FCALL   normalpower     ;
+        
+cactus2 movlw   high SetPL      ;
+        movwf   PCLATH          ;
+        movfw   Srx5            ;get PL code
+        andlw   0x1f            ;
+        call    SetPL           ;set it
+        ;The cactus control system doesn't have a PL decode enable
+        ;bit so if encode is enabled we'll enable both.  If carrier
+        ;squelch is desired while encoding tone the control system
+        ;hangup box line can be used to achieve this.
+        btfsc   Srx5,5          ;jump if PL encode is enabled
+        call    SetTxCS         ;disable PL encode
+        btfsc   Srx5,5          ;jump if PL encode is enabled
+        call    SetRxCS         ;disable PL decode
+cactus7        
+        movlw   high crcmhzlookup
+        movwf   PCLATH
+        movf    Config0,w       ;
+        andlw   CONFIG_BAND_MASK;
+        call    crcmhzlookup    ;
+
+        ;w = Mhz hunderds and tens
+        movwf   temp_3          ;Init temp w 100Mhz digit, 10Mhz digit
+        movlw   high tempx10    
+        movwf   PCLATH
+        clrf    temp_2          ;
+        clrf    temp_1          ;
+        clrf    temp_0          ;
+        call    tempx10         ;
+        swapf   Srx7,w          ;get Mhz digit
+        call    addw2temp       ;
+        call    tempx10         ;
+        movf    Srx7,w          ;get 100Khz digit
+        call    addw2temp       ;
+        call    tempx10         ;
+        swapf   Srx6,w          ;get 10Khz digit
+        call    addw2temp       ;
+        call    tempx10         ;
+        movlw   5               ;
+        btfsc   Srx6,3          ;jump if not +5 Khz
+        call    addw2temp       ;
+        call    tempx10         ;
+        call    tempx10         ;
+        call    tempx10         ;
+        
+;copy new frequency to transmit and receive frequency
+        call    setrxtx         ;
+        call    SetFreqs        ;
+        
+;if we succeeded in setting frequency then assume we're received
+;the correct number of bits and save it for next time.
+
+        btfss   icomflags,COM_FLAG_RX_SET
+        return                  ;Rx frequency wasn't set, return
+        btfss   icomflags,COM_FLAG_TX_SET
+        return                  ;Tx frequency wasn't set, return
+        
+        bsf     STATUS,RP0      ;bank 1
+        movlw   high updateptt  ;
+        movwf   PCLATH
+        movlw   d'24'           ;24 bits?
+        subwf   srxbits_d,w     ;
+        btfsc   STATUS,Z        ;
+        goto    updateptt       ;24 bits is a special case, ignore it
+                      
+        movf    srxbits_d,w     ;get number of bits received
+        movwf   srxlen          ;save it
+        
+updateptt
+        bcf     STATUS,RP0      ;bank 0
+        btfss   PORTD,CONFIG_PTT_IN
+        goto    pttlow
+        bsf     PORTD,CONFIG_PTT_OUT
+        return
+
+pttlow  bcf     PORTD,CONFIG_PTT_OUT
+        return
+
+crcmhzlookup
+        addwf   PCL,f
+        retlw   2               ;10 meters 2x.xxx
+        retlw   5               ;6 meters 5x.xxx
+        retlw   5               ;6 & 10 default to 5x.xxx
+        retlw   d'14'           ;2 meters 14x.xxx
+        retlw   d'44'           ;44x.xxxx
+        retlw   d'14'           ;not used
+        retlw   d'14'           ;not used
+        retlw   d'14'           ;not used
+
+GetVer  movf    From_Adr,w      ;copy from adr into
+        movwf   To_Adr          ;to adr
+        movlw   0x82            ;
+        movwf   Data_0          ;
+        movlw   a'V'            ;
+        movwf   Data_1          ;
+        movwf   Data_8          ;
+        movlw   a' '            ;
+        movwf   Data_2          ;
+        movwf   Data_9          ;
+        movlw   a'0'            ;
+        movwf   Data_3          ;
+        movwf   Data_10         ;
+        movlw   a'.'            ;
+        movwf   Data_4          ;
+        movwf   Data_11         ;
+        movlw   a'3'            ;
+        movwf   Data_5          ;
+        movlw   a'0'            ;
+        movwf   Data_6          ;
+        movlw   a'/'            ;
+        movwf   Data_7          ;
+        
+;read the loader's version number from Flash @ 0x11
+;loader version number.  This was added in Revision 1.4, prior versions had
+;       0.01 - 0x1e8c ("btfss   PIR1,RCIF")
+;       0.02 - 0x0064 ("clrwdt")
+;       0.03 - 0x0064 ("clrwdt") but it was never shipped to anyone
+;       0.04 ...  version number, bcd
+
+        bcf     STATUS,RP0      ;bank 0
+        bsf     STATUS,RP1      ;bank 2
+        movlw   0x11
+        movwf   EEADR
+        clrf    EEADRH          ;
+        BSF     STATUS,RP0      ;Bank 3
+        BSF     EECON1,EEPGD    ;Point to Flash (program) memory
+        bsf     EECON1,RD
+        nop
+        nop
+        bcf     STATUS,RP0      ;bank 2
+        movf    EEDATH,w        ;get ms bits
+        sublw   0x1e            ;V 0.01 ?
+        btfsc   STATUS,Z        ;skip if not
+        goto    ldr1_1          ;
+        
+        movf    EEDATA,w        ;get the data from Flash/EEPROM
+        sublw   0x64            ;V 0.02 or 0.03 ?
+        movlw   0x02            ;assume so
+        btfss   STATUS,Z        ;jump if not
+        movf    EEDATA,w        ;get the data from Flash/EEPROM
+        goto    getv1           ;
+        
+ldr1_1  movlw   0x01            ;
+        
+getv1   bcf     STATUS,RP1      ;bank 0
+        bsf     STATUS,RP0      ;bank 1
+                
+        movwf   Data_13         ;save 
+        swapf   Data_13,w       ;get upper nibble
+        andlw   0xf             ;
+        iorlw   a'0'            ;convert to ASCII
+        movwf   Data_12         ;save 
+        movf    Data_13,w       ;
+        andlw   0xf             ;
+        iorlw   a'0'            ;convert to ASCII
+        movwf   Data_13         ;save 
+        movlw   0xfd            ;
+        movwf   Data_14         ;end of response
+        FGOTO   sendit          ;
+        
         end
 
