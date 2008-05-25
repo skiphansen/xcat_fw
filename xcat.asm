@@ -19,6 +19,10 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.11  2008/05/25 05:35:22  Skip
+; Merged some of the Palomar/Cactus code changes from Vers 0.23a. The
+; exotic changes to the ISR were tossed.  They weren't effective anyway.
+;
 ; Revision 1.10  2008/05/13 14:55:44  Skip
 ; 1. Removed __config directive, this should only be in the loader.
 ; 2. Moved debug data to end of page2, added srxlen (Palomar code
@@ -98,7 +102,7 @@
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
         extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags,txstate
-        extern  copy0,tests
+        extern  copy0,tests,sendsdbg
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -252,6 +256,13 @@ srxto   res     1
 ;serial stream
 srxcnt  res     1
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;copy of the last valid data processed in Palomar mode
+
+srx5_l  res     1               ;last byte clocked in
+srx4_l  res     1               ;
+srx3_l  res     1               ;first byte clocked in
+
 DEBUG   udata
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;NB do not change the order of the following
@@ -265,12 +276,15 @@ srx3_d  res     1               ;first byte clocked in (Doug Hall mode, 5 bytes)
 srx2_d  res     1               ;
 srx1_d  res     1               ;first byte clocked in (Doug Hall mode, 7 bytes)
 
-srxbits_d res   1               ;number of bits to clock in from BCD port
+         global srxbits_d
+srxbits_d res   1               ;number of bits clocked in from sync port
         global  srxto_d
 srxto_d res     1               ;number of sync data timeouts
 
         global  srxcnt_d
-srxcnt_d res    1               ;number of bits clocked in from BCD port
+srxcnt_d res    1               ;number of bits to clock in from sync port
+                                ;before stopping
+                                
         global  srxgood         ;
 srxgood res     1               ;number of frames that set a RX frequency
         global  stxgood         ;
@@ -289,8 +303,6 @@ wd_count res    1               ;
 bo_count res    1               ;
 unk_count res   1               ;
 ;
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
         ; Start at the reset vector
 STARTUP code
@@ -748,12 +760,7 @@ SyncClkInit
 ;
 ;
 PROG1   code
-startup
-        movlw   high startup1   ;
-        movwf   PCLATH
-        call    startup1        ;
-        movlw   high mainloop   ;
-        movwf   PCLATH
+startup FCALL   startup1        ;
 
 mainloop
         clrwdt                  ;kick the dog
@@ -771,11 +778,7 @@ main4   btfsc   PIR1,RCIF       ;
         btfss   TXSTA,TRMT
         goto    main2           ;Tx not ready
 
-        movlw   high txdata     ;
-        movwf   PCLATH          ;
-        call    txdata          ;
-        movlw   high main2      ;
-        movwf   PCLATH          ;
+        FCALL   txdata          ;
         btfss   TXSTA,TRMT      ;
         goto    main2           ;The UART hasn't finished sending yet
         
@@ -797,7 +800,17 @@ main2   bcf     STATUS,RP0      ;bank 0
         call    SaveMode        ;
         btfsc   Config0,CONFIG_COS_MSG  ;
         call    CheckSignal     ;
-        btfss   PIR1,TMR1IF     ;
+        
+        bsf     STATUS,RP0      ;bank 1
+        movf    srxlen,w        ;serial frame length set ? (Palomar mode only)        
+        btfsc   STATUS,Z        ;
+        goto    main8           ;nope
+        subwf   srxbits,w       ;received all of the bits ?
+        btfsc   STATUS,Z        ;
+        goto    procsrx         ;yup, go process the bits
+        
+main8   bcf     STATUS,RP0      ;bank 0
+        btfss   PIR1,TMR1IF     ;has the timer ticked ?
         goto    main1           ;
 
         ;the timer has ticked
@@ -841,27 +854,27 @@ main6   bsf     STATUS,RP0      ;bank 1
         subwf   srxto,w         ;
         btfss   STATUS,Z        ;timeout ?
         goto    main1           ;nope
-
-        ;serial clock timeout, process the data clocked in
-        bcf     PIE2,CCP2IE     ;disable further clock interrupt while
+        
+        ;serial clock timeout or number of expected bits received
+        ;process the data clocked in
+procsrx bcf     PIE2,CCP2IE     ;disable further clock interrupt while
                                 ;processing the data
-
         incf    srxto_d,w       ;
         btfss   STATUS,Z        ;don't roll over counter
         incf    srxto_d,f       ;
-
+        
         ;check to see if any of the first 3 bytes have changed
         bcf     b1flags,B1_FLAG_NEW_DATA        ;
-        movf    srx3,w          ;has srx3 changed ?
-        subwf   srx3_d,w        ;
-        btfss   STATUS,Z        ;
-        goto    newdata         ;
-        movf    srx4,w          ;has srx4 changed ?
-        subwf   srx4_d,w        ;
-        btfss   STATUS,Z        ;
-        goto    newdata         ;
-        movf    srx5,w          ;has srx5 changed ?
+        movf    srx5,w          ;has srx3 changed ?
         subwf   srx5_d,w        ;
+        btfss   STATUS,Z        ;
+        goto    newdata         ;
+        movf    srx6,w          ;has srx4 changed ?
+        subwf   srx6_d,w        ;
+        btfss   STATUS,Z        ;
+        goto    newdata         ;
+        movf    srx7,w          ;has srx5 changed ?
+        subwf   srx7_d,w        ;
         btfss   STATUS,Z        ;
 newdata bsf     b1flags,B1_FLAG_NEW_DATA        ;
 
@@ -888,6 +901,8 @@ newdata bsf     b1flags,B1_FLAG_NEW_DATA        ;
         bcf     icomflags,COM_FLAG_TX_SET ;clear TX frequency set flag
         bcf     icomflags,COM_FLAG_BAD_DATA
         call    cnv_ctrlsys     ;
+        movlw   high setsrxcnt  ;
+        movwf   PCLATH          ;
         call    setsrxcnt       ;reset bit count for next time
 
         bsf     STATUS,RP0      ;bank 1
@@ -914,12 +929,31 @@ txnotset
 
 rxnotset
         btfss   icomflags,COM_FLAG_BAD_DATA
-        goto    main1           ;
+        goto    save3           ;
         bsf     STATUS,RP0      ;bank 1
         
         incf    srxbad,w        ;
         btfss   STATUS,Z        ;don't roll over counter
         incf    srxbad,f        ;
+        goto    sendstats       ;
+       
+        ;data was valid, save the first 3 bytes
+        ;NB: use the "debug" versions because the orginal data may have
+        ;changed by now.
+save3   bsf     STATUS,RP0      ;bank 1
+        movf    srx5_d,w        ;
+        movwf   srx5_l          ;
+        movf    srx4_d,w        ;
+        movwf   srx4_l          ;
+        movf    srx3_d,w        ;
+        movwf   srx3_l          ;
+
+        ;DEBUG --
+sendstats
+        call    CanSend         ;
+        btfsc   STATUS,Z        ;
+        call    sendsdbg        
+        ;DEBUG --
         
 main1   bcf     STATUS,RP0      ;bank 0
         goto    mainloop
