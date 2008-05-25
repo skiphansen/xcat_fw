@@ -1,5 +1,9 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.8  2008/05/25 05:24:29  Skip
+; 1. Added FCALL and FGOTO macros.
+; 2. Added CONFIG_PTT_IN and CONFIG_PTT_OUT.
+;
 ; Revision 1.7  2008/05/13 14:48:04  Skip
 ; Added TEST_GENERIC94, TEST_GENERIC435.
 ;
@@ -26,6 +30,20 @@
 ;        
         ERRORLEVEL -302 ;remove messages about using proper bank
 
+FCALL   macro   where
+        movlw   high where
+        movwf   PCLATH          ;
+        call    where           ;
+        movlw   high $
+        movwf   PCLATH          ;
+        endm
+        
+FGOTO   macro   where
+        movlw   high where
+        movwf   PCLATH          ;
+        goto    where           ;
+        endm
+        
 ;#define SIMULATE
 ;#define VHF_RANGE_1
 ;#define VHF_RANGE_2
@@ -105,9 +123,13 @@
 
 #define CONFIG_2_5_SEL  5       ;b5: 0 - UF5 active adds 2.5 Khz to frequency
                                 ;    1 - UF5 user output
+#define CONFIG_PTT_OUT  5       ;b5: ptt output bit (Palomar mode)
 
 #define CONFIG_POT_SI   6       ;b6: 0 - UF6 Digital pots SI
                                 ;    1 - UF6 output
+                                
+#define CONFIG_PTT_IN   7       ;b7: 0 - ptt input bit (Palomar mode)
+                                ;    1 - UF7 output
                                 
 #define CONFIG_SQU_POT_MASK     0x58                                
 
