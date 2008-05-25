@@ -1,4 +1,7 @@
 ; $Log: tests.asm,v $
+; Revision 1.3  2008/05/25 05:32:58  Skip
+; Corrected TEST_PALOMAR.
+;
 ; Revision 1.2  2008/05/13 14:48:04  Skip
 ; Added TEST_GENERIC94, TEST_GENERIC435.
 ;
@@ -16,10 +19,23 @@
 PROG3   code
         global  tests
 tests        
+        ;146.76 pl 123.0 (18) Palomar remote base #1
         ifdef   TEST_PALOMAR
         movlw   0x23            ;
         movwf   Config0         ;
+        bsf     STATUS,RP0      ;bank 1
+        movlw   0xee            ;
+        movwf   srx5            ;
+        movlw   0x9f            ;
+        movwf   srx6            ;
+        movlw   0x98            ;
+        movwf   srx7            ;
+        movlw   d'24'           ;
+        movwf   srxbits         ;
+        clrf    srxto           ;clear timeout counter
+        bcf     STATUS,RP0      ;bank 0
         endif      
+        
         ifdef  VHF_RANGE_1
         ;VHF range 1 radio, tx vco split
         ;144000000 = 8954400
