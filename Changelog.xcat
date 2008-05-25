@@ -1,4 +1,20 @@
 ####################################
+Changes in version 0.30 5/22/2008
+
+New features:
+1. Restored Palomar support from Vers 0.23a.
+2. Modified Palomar code to allow PTT to be routed thru the Xcat to prevent
+   interrupt conflicts between serial data and the Syntor reading the code
+   plug data in response to PTT.  The PTT in line is now copied to the PTT
+   out line after each block of data is received from the Palomar.  Hopefully
+   this will prevent ISR collisions.
+
+Minor enhancements: 
+1. Added loader's version number to version string returned get firmware 
+   version request.
+
+
+####################################
 Changes in version 0.29 5/13/2008
 
 Bug fixes:
