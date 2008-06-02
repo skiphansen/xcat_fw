@@ -1,7 +1,11 @@
 ;
 ; $Log: modetbl.asm,v $
-; Revision 1.1  2004/07/03 16:38:59  Skip Hansen
-; Initial revision
+; Revision 1.2  2008/06/02 17:13:32  Skip
+; Removed all mode definitions except mode1.  Prevents blowing away
+; the user's modes for no good reason when the firmware is updated.
+;
+; Revision 1.1.1.1  2004/07/03 16:38:59  Skip Hansen
+; Initial import: V0.09.  Burned into first 10 boards.
 ;        
         processor       16F877A
         extern  vfo0,vfo1,vfo2,vfo3,vfo4,vfo5,vfo6,vfo7
@@ -26,6 +30,8 @@ mode_1
         goto    vfod    ;
         goto    vfoe    ;
         goto    vfof    ;
+        
+        ifdef   INCLUDE_MODES
 
         global  mode_2
 mode_2
@@ -616,4 +622,5 @@ mode_32
         retlw   0x43
         retlw   0x89
         retlw   0x44
+        endif
         end
