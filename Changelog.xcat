@@ -1,4 +1,13 @@
 ####################################
+Changes in version 0.32 7/3/2008
+
+Minor enhancements: 
+1. Added code to the mainloop to copy PTT_IN to PTT_OUT when I/O 7 is 
+   defined as an input and *not* in Palomar mode. (Make testing easier since
+   a radio wired for a Palomar can still transmit w/o the Palomar by disabling
+   Palomar mode.)
+
+####################################
 Changes in version 0.31 5/24/2008
 
 Bug fixes:
