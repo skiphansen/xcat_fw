@@ -1,5 +1,8 @@
 ;
 ; $Log: defines.inc,v $
+; Revision 1.9  2008/07/03 23:32:35  Skip
+; Cosmetic - comments only.
+;
 ; Revision 1.8  2008/05/25 05:24:29  Skip
 ; 1. Added FCALL and FGOTO macros.
 ; 2. Added CONFIG_PTT_IN and CONFIG_PTT_OUT.
@@ -105,6 +108,8 @@ FGOTO   macro   where
 #define CONFIG_UF_AS_SQUELCH    0x80
 
 ;Configuration byte 1: ConfUF - User defined output port bit usages
+; 1 = user output (Doug Hall mode), 0 = alternate usage
+;
 #define CONFIG_COS_IN   0       ;b0: 0 - UF0 COS input
                                 ;    1 - UF0 user output
 #define CONFIG_QRP      1       ;b1: 0 - UF1 QRP power output
@@ -123,7 +128,7 @@ FGOTO   macro   where
 
 #define CONFIG_2_5_SEL  5       ;b5: 0 - UF5 active adds 2.5 Khz to frequency
                                 ;    1 - UF5 user output
-#define CONFIG_PTT_OUT  5       ;b5: ptt output bit (Palomar mode)
+#define CONFIG_PTT_OUT  5       ;b5: ptt output bit (when CONFIG_PTT_IN == 0)
 
 #define CONFIG_POT_SI   6       ;b6: 0 - UF6 Digital pots SI
                                 ;    1 - UF6 output
