@@ -1,4 +1,7 @@
 ; $Log: tests.asm,v $
+; Revision 1.4  2008/07/03 23:34:10  Skip
+; Added codd to set ConfUF in Palomar mode.
+;
 ; Revision 1.3  2008/05/25 05:32:58  Skip
 ; Corrected TEST_PALOMAR.
 ;
@@ -12,7 +15,7 @@
         include <p16f877a.inc>
         include defines.inc
 
-        extern  Config0
+        extern  Config0,ConfUF
         extern  srx1,srx2,srx3,srx4,srx5,srx6,srx7,srxbits,srxto
         
 
@@ -23,6 +26,8 @@ tests
         ifdef   TEST_PALOMAR
         movlw   0x23            ;
         movwf   Config0         ;
+        movlw   0x7e            ;
+        movwf   ConfUF
         bsf     STATUS,RP0      ;bank 1
         movlw   0xee            ;
         movwf   srx5            ;
