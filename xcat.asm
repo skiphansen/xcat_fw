@@ -19,6 +19,14 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.13  2008/07/03 23:43:24  Skip
+; 1. Hard code address of mode_17 which is no longer defines by source.
+; 2. Trivial optimization ... removed redundant code at beginning of SyncClkInit.
+; 3. Added code to the mainloop to copy PTT_IN to PTT_OUT when I/O 7 is
+;    defined as an input and *not* in Palomar mode. (Make testing easier since
+;    a radio wired for a Palomar can still transmit w/o the Palomar by disabling
+;    Palomar mode.)
+;
 ; Revision 1.12  2008/05/25 05:44:04  Skip
 ; Added code to SyncClkInit to unkey transmitter on initialization in Palomar
 ; mode.
@@ -101,12 +109,12 @@
         extern  BARGB0, BARGB1, BARGB2, BARGB3
         extern  REMB0, REMB1, REMB2, REMB3
         extern  FXD3232U,serialinit,rxdata,txdata
-        extern  mode_1,mode_17,memchan
+        extern  mode_1,memchan
         extern  sendmode,CanSend
         extern  cnv_generic,cnvcactus
         extern  pltable,limits10m,limits6m,limits2m,limits440
         extern  icomflags,cnv_ctrlsys,setsrxcnt,b1flags,txstate
-        extern  copy0,tests,sendsdbg
+        extern  copy0,tests,sendsdbg,updateptt
 
         global  settxf,setrxf
         global  rxf_0,rxf_1,rxf_2,rxf_3
@@ -412,7 +420,8 @@ delayloop
 
         movlw   high mode_1
         btfsc   PORTC,5         ;
-        movlw   high mode_17
+;        movlw   high mode_17
+        movlw   0x1f            ;
         movwf   PCLATH          ;
         nop                     ;
         nop                     ;
@@ -663,7 +672,7 @@ clr3    clrf    INDF            ;
         call    readee1         ;
         
 ;Init port D
-        movf    ConfUF,w        ;1 = user output bit
+        movf    ConfUF,w        ;1 = user output bit, 0 = alternate function
         iorlw   0x7e            ;bits 1 -> 6 are always outputs
         xorlw   0xff            ;invert for tristate control
         bsf     STATUS,RP0      ;bank 1
@@ -753,8 +762,6 @@ rd_loop BSF     STATUS,RP1      ;Bank 3
 
 ;enable interrupt on Synchronous clock (ccp2 input)
 SyncClkInit
-        swapf   Config0,w       ;
-        andlw   CONFIG_CTRL_MASK;
         sublw   1               ;Doug Hall mode ?
         btfss   STATUS,Z        ;skip if so
         bsf     PORTD,CONFIG_PTT_OUT    ;unkey Tx for Palomar mode
@@ -966,7 +973,17 @@ sendstats
         ;DEBUG --
         
 main1   bcf     STATUS,RP0      ;bank 0
-        goto    mainloop
+        btfsc   ConfUF,CONFIG_PTT_IN    ;I/O 7 PTT in ?
+        goto    main3           ;no
+        
+        swapf   Config0,w       ;
+        andlw   CONFIG_CTRL_MASK;
+        sublw   1               ;Palomar mode ?
+        btfss   STATUS,C        ;
+        ;Palomar mode, don't update PTT until we get a frequency update
+        goto    main3
+        FCALL   updateptt
+main3   goto    mainloop
 
 ;Send signal received/lost state changes
 CheckSignal
@@ -1860,7 +1877,9 @@ setmodeadr1
 
         movlw   high mode_1     ;Flash address MSB
         btfsc   STATUS,C        ;
-        movlw   high mode_17    ;
+;       movlw   high mode_17    ;
+        movlw   0x1f            ;
+        
         MOVWF   EEADRH          ;
 
         BCF     STATUS,RP1      ;Bank 0
