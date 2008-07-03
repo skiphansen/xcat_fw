@@ -1,4 +1,8 @@
 ;$Log: icom.asm,v $
+;Revision 1.13  2008/07/03 23:33:19  Skip
+;1. Changed version number to 0.32.
+;2. Made updateptt global.
+;
 ;Revision 1.12  2008/05/25 05:42:56  Skip
 ;Bumped version number to 0.31.
 ;
@@ -1982,7 +1986,8 @@ cactus7
                       
         movf    srxbits_d,w     ;get number of bits received
         movwf   srxlen          ;save it
-        
+
+        global  updateptt
 updateptt
         bcf     STATUS,RP0      ;bank 0
         btfss   PORTD,CONFIG_PTT_IN
@@ -2022,7 +2027,7 @@ GetVer  movf    From_Adr,w      ;copy from adr into
         movwf   Data_11         ;
         movlw   a'3'            ;
         movwf   Data_5          ;
-        movlw   a'1'            ;
+        movlw   a'2'            ;
         movwf   Data_6          ;
         movlw   a'/'            ;
         movwf   Data_7          ;
