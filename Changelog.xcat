@@ -1,4 +1,16 @@
 ####################################
+Changes in version 0.33 2/23/2010
+
+Bug fixes:
+1. Removed code that cleared the scan enable bit in the VFO on power up.
+   This code was a workaround a version 0.09 bug that is no longer needed.
+
+Minor enhancements: 
+1. Changed lower limit for UHF radios to 420.  NB: this does *not* mean that
+   the Syntor will cover 420 -> 450, only that the Xcat will accept frequencies
+   lower than 440.0.
+   
+####################################
 Changes in version 0.32 7/3/2008
 
 Minor enhancements: 
