@@ -19,6 +19,11 @@
 ; Port D1:
 ;
 ; $Log: xcat.asm,v $
+; Revision 1.14  2010/02/23 16:47:43  Skip
+; Removed code to disable scanning on power up.
+; Hopefully this is no longer needed.
+; Note to self:  Make sure scanning is disabled when we ship new Xcats!
+;
 ; Revision 1.13  2008/07/03 23:43:24  Skip
 ; 1. Hard code address of mode_17 which is no longer defines by source.
 ; 2. Trivial optimization ... removed redundant code at beginning of SyncClkInit.
@@ -713,9 +718,11 @@ clr3    clrf    INDF            ;
         call    recallmode      ;
         
         ;Disable scan for now
+        ifdef   CLR_SCAN_ON_POWER_UP
         movlw   0x80            ;
         movwf   code_9          ;
         movwf   code_a          ;
+        endif      
         
         ifdef   SIMULATE
         movlw   high tests      
