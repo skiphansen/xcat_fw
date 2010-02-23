@@ -1,4 +1,7 @@
 ;$Log: icom.asm,v $
+;Revision 1.14  2010/02/23 16:48:46  Skip
+;Bumped version to 0.33.
+;
 ;Revision 1.13  2008/07/03 23:33:19  Skip
 ;1. Changed version number to 0.32.
 ;2. Made updateptt global.
@@ -2027,7 +2030,7 @@ GetVer  movf    From_Adr,w      ;copy from adr into
         movwf   Data_11         ;
         movlw   a'3'            ;
         movwf   Data_5          ;
-        movlw   a'2'            ;
+        movlw   a'3'            ;
         movwf   Data_6          ;
         movlw   a'/'            ;
         movwf   Data_7          ;
