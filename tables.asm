@@ -5,6 +5,9 @@
 ;Ordered by Comm Spec PL number
 ;
 ; $Log: tables.asm,v $
+; Revision 1.4  2010/02/23 16:48:19  Skip
+; Changed lower limit on UHF to 420.
+;
 ; Revision 1.3  2007/02/03 15:14:03  Skip
 ; Changed default baudrate to 9600 for emulator.
 ;
@@ -236,10 +239,16 @@ limits2m
         ;440 Mhz = 1A 39 DE 00
         global  limits440
 limits440
-        data    0
-        data    0xde
-        data    0x39
-        data    0x1a
+;        data    0
+;        data    0xde
+;        data    0x39
+;        data    0x1a
+
+        ;420 Mhz = 19 08 B1 00
+        data    0x00
+        data    0xb1
+        data    0x08
+        data    0x19
         
         ;450 Mhz = 1A D2 74 80
         data    0x80
