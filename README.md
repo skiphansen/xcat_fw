@@ -8,8 +8,6 @@ https://github.com/skiphansen/xcat_fw
 
 This the firmware for the Xcat Syntor X code plug replacement project.
 
-![](./assets/vfo.png)
-
 This program was originally written in 2004 and hasn't been touched since 
 Feb 2010. 
 
