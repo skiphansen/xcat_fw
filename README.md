@@ -12,8 +12,8 @@ The Xcat was a PIC based device that replaced the Motorola Syntor X radios
 For more information about Xcats visit the Xcat group on [groups.io](https://groups.io/g/xcat)
 
 The project consists of
-- [Xcat PC control program](https://github.com/skiphansen/xcat_fw)
-- [Xcat firmware](https://github.com/skiphansen/xcat_ldr)
+- [Xcat PC control program](https://github.com/skiphansen/xcat_pc)
+- [Xcat firmware](https://github.com/skiphansen/xcat_fw)
 - [Xcat booloader](https://github.com/skiphansen/xcat_ldr)
 
 This the firmware for the Xcat Syntor X code plug replacement project.
